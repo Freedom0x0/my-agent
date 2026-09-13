@@ -115,10 +115,26 @@ frontend/
   src/
     main.tsx
     App.tsx
-    api.ts
-    types.ts
     styles.css
+    api/
+      httpClient.ts
+      contracts.ts
+      fileApi.ts
+      planApi.ts
+      executionApi.ts
+      mappers.ts
+    domain/
+      models.ts
+      workflow.ts
+    hooks/
+      useWorkflow.ts
+      useUpload.ts
+      usePlan.ts
+      useExecution.ts
     components/
+      primitives/
+      feedback/
+      layout/
       FilePanel.tsx
       TaskPanel.tsx
       InspectionPanel.tsx
@@ -178,6 +194,7 @@ docs/
 | `MODEL_API_KEY` | 空 | 只在后端读取 |
 | `MODEL_NAME` | 空 | 模型名称 |
 | `CORS_ORIGINS` | `http://localhost:5173` | 逗号分隔的前端来源 |
+| `VITE_API_BASE_URL` | `/api` | 前端构建时使用的后端 API 前缀，只允许相对路径或配置的 HTTPS 来源 |
 
 `APP_MODE=demo` 时不要求模型相关变量存在。`APP_MODE=llm` 且模型配置不完整时，服务可以启动，但规划接口必须返回稳定的 `model_not_configured` 错误，而不能回退到任意未声明的模型。
 
@@ -187,7 +204,7 @@ docs/
 
 后端测试依赖至少包括：`pytest`、`pytest-cov`。
 
-前端运行依赖至少包括：`react`、`react-dom`。
+前端运行依赖至少包括：`react`、`react-dom`、`zod`。
 
 前端开发依赖至少包括：`typescript`、`vite`、`@vitejs/plugin-react`、`vitest`、`jsdom`、`@testing-library/react`、`@testing-library/jest-dom`、`@testing-library/user-event`。
 
@@ -961,7 +978,8 @@ plan_ready -> executing -> completed
 export function uploadFile(file: File): Promise<FileUploadResponse>;
 export function createPlan(fileIds: string[], request: string): Promise<PlanResponse>;
 export function executePlan(input: ExecuteRequest): Promise<ExecutionResponse>;
-export function downloadUrl(outputId: string): string;
+export function downloadOutput(outputId: string): Promise<void>;
+export function getAudit(outputId: string): Promise<AuditView>;
 ```
 
 所有 API 错误统一解析 `error_code` 和 `message`，前端显示 `message`，调试信息只写浏览器控制台，不把服务器路径显示给用户。
@@ -975,6 +993,284 @@ export function downloadUrl(outputId: string): string;
 - 结果页面显示下载按钮、结论卡片、指标变化和可展开来源。
 - 上传、规划和执行期间显示加载状态，避免重复提交。
 - 失败后保留已上传文件和原有体检结果，允许用户修改任务重新规划。
+
+### 13.5 前端防腐层
+
+前端不得在 React 组件中直接使用后端 DTO、`fetch`、HTTP 状态码或后端错误码。前端分为三层：
+
+```text
+components/hooks
+      |
+frontend domain models + use-case functions
+      |
+API anti-corruption layer
+      |
+HTTP transport + backend JSON
+```
+
+目录固定为：
+
+```text
+frontend/src/
+  api/
+    httpClient.ts       # 唯一的 HTTP 入口、拦截器和 ApiError
+    contracts.ts        # 后端传输 DTO 的 Zod schema 和推导类型
+    fileApi.ts          # 上传用例
+    planApi.ts          # 规划用例
+    executionApi.ts     # 执行、下载和审计用例
+    mappers.ts          # DTO -> 前端领域模型
+  domain/
+    models.ts           # 前端显示模型，不复用后端字段类型
+    workflow.ts         # 工作流状态和 reducer
+  hooks/
+    useWorkflow.ts
+    useUpload.ts
+    usePlan.ts
+    useExecution.ts
+  components/
+    primitives/
+    feedback/
+    layout/
+    FilePanel.tsx
+    TaskPanel.tsx
+    InspectionPanel.tsx
+    PlanPanel.tsx
+    ResultPanel.tsx
+```
+
+防腐层规则：
+
+1. 只有 `api/` 可以知道 `/api/...` 路径、HTTP 方法、后端 JSON 字段名、`error_code` 和状态码。
+2. `contracts.ts` 使用 Zod 校验运行时响应；TypeScript 类型必须从 schema 推导，不能只依赖编译期接口。
+3. `mappers.ts` 将后端 DTO 转为前端模型，例如 `SheetInspectionDto` 转为 `SheetSummary`，组件只能消费 `SheetSummary`。
+4. 后端字段重命名、错误码变化或空值变化只允许在 `api/` 内适配，不能扩散到组件。
+5. 组件不能接收 `Response`、`AxiosResponse`、`unknown` 或后端 DTO；组件 props 必须是前端领域模型或明确的 UI props。
+6. 下载必须通过 `executionApi.downloadOutput(outputId)`，由防腐层处理二进制响应、文件名和错误；组件不能拼接任意下载路径。
+
+### 13.6 API 客户端和统一拦截器
+
+第一版使用浏览器原生 `fetch`，不引入 Axios。所有网络请求必须经过 `httpClient.request`，禁止在组件、hook 或其他 API 文件中直接调用 `fetch`。
+
+```ts
+export type RequestContext = {
+  requestId: string
+  signal?: AbortSignal
+  timeoutMs?: number
+}
+
+export class ApiError extends Error {
+  readonly status: number
+  readonly errorCode: string
+  readonly details: unknown
+  readonly requestId: string
+}
+
+export interface HttpClient {
+  request<T>(
+    path: string,
+    init?: RequestInit,
+    context?: Partial<RequestContext>,
+  ): Promise<T>
+}
+```
+
+`httpClient` 必须按以下顺序执行：
+
+1. 拼接固定 `VITE_API_BASE_URL` 和相对 API 路径；路径必须以 `/api/` 开头。
+2. 生成 `crypto.randomUUID()` 请求 ID，并通过 `X-Request-ID` 发送。
+3. 对没有外部 `signal` 的请求创建 `AbortController`，默认超时 30 秒；上传和执行默认 120 秒。
+4. 统一设置 `Accept: application/json`；JSON 请求设置 `Content-Type: application/json`，`FormData` 请求不手动设置 multipart boundary。
+5. 响应状态为 2xx 时按调用方声明解析 JSON 或 Blob。
+6. 非 2xx 时解析 `{ error_code, message, details }`，创建 `ApiError`；无法解析时使用稳定的 `network_error` 或 `http_error`。
+7. `AbortError` 转换成 `request_timeout`，并保留可展示的中文提示。
+8. 记录请求 ID、路径、耗时和结果码；生产日志不得记录文件内容、请求体、API Key 或完整模型响应。
+
+拦截器分为四个纯函数，避免隐藏副作用：
+
+```ts
+type RequestInterceptor = (
+  input: RequestInput,
+) => RequestInput | Promise<RequestInput>
+
+type ResponseInterceptor = (
+  response: Response,
+  context: RequestContext,
+) => Response | Promise<Response>
+
+type ErrorInterceptor = (
+  error: unknown,
+  context: RequestContext,
+) => never | Promise<never>
+```
+
+默认拦截器固定为：请求 ID、超时、响应错误标准化、网络错误标准化和调试计时。第一版不自动重试上传、执行和下载请求；POST/写操作重试可能造成重复任务。健康检查和审计 GET 也不自动重试，除非后续明确加入幂等键。
+
+### 13.7 传输契约与领域模型
+
+`frontend/src/api/contracts.ts` 必须定义以下 schema：`fileUploadResponseSchema`、`planResponseSchema`、`executionResponseSchema`、`auditResponseSchema` 和 `errorResponseSchema`。关键后端 DTO 字段必须在运行时校验：
+
+```ts
+const fileUploadResponseSchema = z.object({
+  file_id: z.string().uuid(),
+  filename: z.string().min(1),
+  size_bytes: z.number().int().nonnegative(),
+  inspection: workbookInspectionDtoSchema,
+})
+```
+
+前端领域模型使用前端命名和展示需要的结构，例如：
+
+```ts
+type FileItem = {
+  id: string
+  name: string
+  sizeBytes: number
+  sheets: SheetSummary[]
+}
+
+type SheetSummary = {
+  ref: string
+  displayName: string
+  rowCount: number
+  columnCount: number
+  issues: IssueSummary[]
+}
+
+type PlanView = {
+  id: string
+  explanation: string
+  steps: PlanStepView[]
+  outputNames: string[]
+  requiresConfirmation: boolean
+}
+```
+
+`mappers.ts` 必须处理：snake_case 到 camelCase、可选字段默认值、来源字段展示名、文件引用显示名和错误码到用户提示的映射。组件不得直接写 `response.json().plan.operations` 之类的后端结构访问。
+
+### 13.8 通用组件和组件边界
+
+通用组件只负责展示和用户交互，通过 props 接收数据和回调；它们不能调用 API、读取 Context 中的后端数据或包含业务字段映射。
+
+必须抽离以下组件：
+
+```text
+components/primitives/
+  Button.tsx       # variant、size、loading、disabled、icon
+  IconButton.tsx   # 必须提供 aria-label 和 title
+  Badge.tsx
+  Card.tsx
+  Divider.tsx
+  Input.tsx
+  TextArea.tsx
+  Progress.tsx
+  Table.tsx
+  EmptyState.tsx
+  Skeleton.tsx
+
+components/feedback/
+  Alert.tsx
+  ToastRegion.tsx
+  ErrorState.tsx
+  ConfirmDialog.tsx
+
+components/layout/
+  AppShell.tsx
+  Panel.tsx
+  PanelHeader.tsx
+  SectionHeader.tsx
+```
+
+复合组件使用组合而非继承：`Panel` 负责边界和间距，`PanelHeader` 负责标题和操作区，`Table` 负责表头、空状态和滚动容器；领域组件负责把 `FileItem`、`PlanView` 和 `ExecutionView` 映射为这些通用组件的 props。
+
+组件边界固定为：
+
+- `FilePanel`：只处理文件选择、上传回调和文件列表展示。
+- `InspectionPanel`：只展示 `SheetSummary` 和 `IssueSummary`。
+- `TaskPanel`：只编辑用户请求并触发 `onCreatePlan`。
+- `PlanPanel`：只展示 `PlanView`，触发 `onConfirm`。
+- `ResultPanel`：只展示 `ExecutionView`，触发 `onDownload` 和来源展开。
+- `App`/`useWorkflow`：唯一负责跨面板工作流编排。
+
+### 13.9 状态管理和 hook 规则
+
+第一版使用 `WorkflowProvider + useReducer`，不引入 Redux 或 Zustand。Reducer 只处理可序列化的领域状态；文件对象和 AbortController 保存在 hook 的局部引用中，不放进 reducer。
+
+状态至少包含：
+
+```ts
+type WorkflowState = {
+  status: WorkflowStatus
+  files: FileItem[]
+  selectedFileIds: string[]
+  activeSheetRef: string | null
+  requestText: string
+  plan: PlanView | null
+  result: ExecutionView | null
+  error: UserFacingError | null
+}
+```
+
+hook 规则：
+
+- `useUpload` 只调用 `fileApi.uploadFile`，成功后 dispatch `FILE_ADDED`。
+- `usePlan` 只调用 `planApi.createPlan`，处理规划中的 loading 和错误。
+- `useExecution` 只调用 `executionApi.executePlan` 和 `downloadOutput`。
+- hook 不返回后端 DTO，不在 hook 中渲染 JSX。
+- 所有异步操作在卸载时取消；过期响应不能覆盖较新的 workflow 状态。
+- 任务输入最多 2,000 个字符；空白输入不提交。
+
+### 13.10 统一样式和设计令牌
+
+样式只使用 `frontend/src/styles.css` 及其拆分文件中的 CSS variables 和 class，业务组件不写大段 inline style。颜色、间距、字号、圆角、阴影、边框和层级必须来自令牌：
+
+```css
+:root {
+  --color-bg: #f4f6f8;
+  --color-surface: #ffffff;
+  --color-text: #17212b;
+  --color-muted: #66727f;
+  --color-border: #d9e0e7;
+  --color-accent: #1769aa;
+  --color-success: #1f7a4d;
+  --color-warning: #a86400;
+  --color-danger: #b42318;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --shadow-panel: 0 1px 3px rgb(23 33 43 / 8%);
+}
+```
+
+样式规则：
+
+- 使用 `data-state`、`data-variant` 和语义 class 表达状态，不拼接任意用户输入生成 class 名。
+- 组件的布局尺寸由 CSS grid/flex 和最小尺寸控制，按钮、工具栏、面板标题不能因文本变化导致跳动。
+- 所有交互控件有 `:focus-visible` 样式；图标按钮必须有 `aria-label` 和 tooltip。
+- 颜色不能只依赖色彩表达错误，错误同时显示图标或文本。
+- 表格预览横向滚动，长字段截断但可通过 title 或详情展开查看。
+- 900px 以下切换单列；不以视口宽度缩放字号。
+- 页面、面板、卡片不层层嵌套成装饰性卡片；面板用于工作区分区，卡片只用于重复结果项和结论。
+
+### 13.11 前端错误与异常边界
+
+应用根部必须使用 `ErrorBoundary` 捕获渲染异常，显示可恢复的错误页并提供“重新加载工作区”操作。网络错误由 `ApiError` 统一转换为 `UserFacingError`，映射如下：
+
+| `error_code` | 用户提示 |
+|---|---|
+| `unsupported_file` | 暂不支持该文件格式，请上传 xlsx、xls 或 csv。 |
+| `file_too_large` | 文件超过 25 MiB，请缩小文件后重试。 |
+| `ambiguous_request` | 任务中的字段或匹配方式不明确，请补充说明。 |
+| `confirmation_required` | 该操作会修改或删除数据，请确认影响范围后继续。 |
+| `execution_failed` | 文件处理失败，源文件未被修改，请调整任务后重试。 |
+| `model_timeout` | 智能规划暂时超时，请重试或切换演示模式。 |
+| 其他 | 服务暂时不可用，请稍后重试。 |
+
+错误提示不显示服务器绝对路径、堆栈、原始模型输出或请求体。表单验证错误就地显示；网络错误显示在 `ToastRegion`，计划和执行错误同时保留在对应面板。
 
 ## 14. 安全与资源限制
 
