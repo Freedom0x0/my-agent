@@ -16,6 +16,7 @@ from ..schemas import ColumnInspection, DataIssue, SheetInspection, WorkbookInsp
 SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 RESERVED_PREFIX = "__tablex_"
 INTERNAL_SOURCE_ROW = "__tablex_source_row__"
+INTERNAL_COL = INTERNAL_SOURCE_ROW
 MAX_PREVIEW_ROWS = 20
 HEADER_SCAN_LIMIT = 20
 MAX_AFFECTED_ROWS_LOG = 200
