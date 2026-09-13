@@ -5,6 +5,11 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field
 
 
+class HealthResponse(BaseModel):
+    status: str
+    mode: str
+
+
 # --- Inspection models ---
 
 class ColumnInspection(BaseModel):
@@ -57,14 +62,14 @@ class SheetRef(BaseModel):
 # --- Operation models (discriminated by `kind`) ---
 
 class NormalizeOperation(BaseModel):
-    kind: Literal["normalize"]
+    kind: Literal["normalize"] = "normalize"
     sheet: str
     columns: list[str] = Field(min_length=1)
     target_type: Literal["number", "date", "text"]
 
 
 class DeduplicateOperation(BaseModel):
-    kind: Literal["deduplicate"]
+    kind: Literal["deduplicate"] = "deduplicate"
     sheet: str
     key_columns: list[str] = Field(min_length=1)
     keep: Literal["first", "last"] = "first"
@@ -80,7 +85,7 @@ class FilterCondition(BaseModel):
 
 
 class FilterOperation(BaseModel):
-    kind: Literal["filter"]
+    kind: Literal["filter"] = "filter"
     sheet: str
     conditions: list[FilterCondition] = Field(min_length=1)
     match: Literal["all", "any"] = "all"
@@ -88,7 +93,7 @@ class FilterOperation(BaseModel):
 
 
 class GroupSummaryOperation(BaseModel):
-    kind: Literal["group_summary"]
+    kind: Literal["group_summary"] = "group_summary"
     sheet: str
     group_by: list[str] = Field(min_length=1)
     metrics: dict[str, list[Literal["sum", "mean", "count", "min", "max"]]]
@@ -96,7 +101,7 @@ class GroupSummaryOperation(BaseModel):
 
 
 class CompareOperation(BaseModel):
-    kind: Literal["compare"]
+    kind: Literal["compare"] = "compare"
     left_sheet: str
     right_sheet: str
     key_columns: list[str] = Field(min_length=1)
@@ -105,7 +110,7 @@ class CompareOperation(BaseModel):
 
 
 class FillFormulaOperation(BaseModel):
-    kind: Literal["fill_formula"]
+    kind: Literal["fill_formula"] = "fill_formula"
     sheet: str
     target_column: str
     expression: str
@@ -115,7 +120,7 @@ class FillFormulaOperation(BaseModel):
 
 
 class CreateIssueSheetOperation(BaseModel):
-    kind: Literal["create_issue_sheet"]
+    kind: Literal["create_issue_sheet"] = "create_issue_sheet"
     output_sheet: str = "问题清单"
     issue_codes: list[str] | None = None
 
