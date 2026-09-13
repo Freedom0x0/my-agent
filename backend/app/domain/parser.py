@@ -365,7 +365,6 @@ def _sheet_from_xlsx(path: Path, sheet_name: str) -> tuple[SheetInspection, pd.D
         # mixed date detection on text-looking date columns
         mixed_date, rows_md = _detect_mixed_date(df[col]) if not df.empty else (False, [])
         if mixed_date:
-            _, _, rows_md = _detect_mixed_date(df[col])
             issues.append(
                 DataIssue(
                     code="mixed_date",

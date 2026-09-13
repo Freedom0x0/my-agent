@@ -103,9 +103,13 @@ class DemoPlanner:
         # Pattern 1: full cleanup + summarize + issue list
         if ("检查" in text or "体检" in text) and "汇总" in text:
             resolved = _resolve_columns(primary_sheet, ["部门", "金额"])
+            try:
+                key_col = _resolve_columns(primary_sheet, ["编号"])["编号"]
+            except AmbiguousRequestError:
+                key_col = resolved["部门"]
             operations = [
                 NormalizeOperation(sheet=primary_ref, columns=[resolved["金额"]], target_type="number"),
-                DeduplicateOperation(sheet=primary_ref, key_columns=[_resolve_columns(primary_sheet, ["编号"]).get("编号", resolved["部门"])]),
+                DeduplicateOperation(sheet=primary_ref, key_columns=[key_col]),
                 GroupSummaryOperation(
                     sheet=primary_ref,
                     group_by=[resolved["部门"]],
@@ -119,7 +123,7 @@ class DemoPlanner:
                 source_sheets=[primary_ref],
                 operations=operations,
                 outputs=["清洗后数据", "汇总结果", "问题清单"],
-                explanation="统一金额格式并按订单号去重后汇总部门金额，并记录问题清单",
+                explanation="统一金额格式并按编号去重后汇总部门金额，并记录问题清单",
                 requires_confirmation=True,
             )
 
