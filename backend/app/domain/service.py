@@ -48,6 +48,7 @@ def _build_planner() -> Planner:
                 base_url=settings.MODEL_BASE_URL,
                 api_key=settings.MODEL_API_KEY,
                 model_name=settings.MODEL_NAME,
+                api_style=settings.MODEL_API_STYLE,
             )
         except Exception:
             return DemoPlanner()

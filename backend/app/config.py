@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     MODEL_BASE_URL: str = ""
     MODEL_API_KEY: str = ""
     MODEL_NAME: str = ""
+    MODEL_API_STYLE: str = "auto"  # "auto" | "openai" | "anthropic"
 
     CORS_ORIGINS: str = "http://localhost:5173"
 
