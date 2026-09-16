@@ -24,3 +24,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+.claude/
+.codegraph/
+.trellis/
+.cursor/
+.peaks/
