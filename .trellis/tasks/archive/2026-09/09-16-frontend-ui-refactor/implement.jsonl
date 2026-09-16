@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "组件替换涉及前后端 prompt 同步，需要跨层思考指南"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "了解项目目录结构"}

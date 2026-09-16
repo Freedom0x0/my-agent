@@ -2,7 +2,12 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { api, ApiError } from "../api/httpClient";
-import { makeUserFacingError, mapChatResponseToAssistantMessage, mapUploadResponse } from "../api/mappers";
+import {
+  makeUserFacingError,
+  mapChatResponseToAssistantMessage,
+  mapSessionMessages,
+  mapUploadResponse,
+} from "../api/mappers";
 import { parseWorkbook } from "./useSpreadsheet";
 import type {
   ChatMessage,
@@ -141,7 +146,10 @@ export const useAppStore = create<WorkflowState & Actions>()(
         localStorage.setItem(SESSION_KEY, id);
         try {
           const detail = await api.getSession(id);
-          set({ outputIds: detail.output_ids ?? [] });
+          set({
+            outputIds: detail.output_ids ?? [],
+            messages: mapSessionMessages(detail.messages ?? []),
+          });
         } catch (err) {
           if (err instanceof ApiError) {
             set({ error: makeUserFacingError(err.errorCode, err.message) });

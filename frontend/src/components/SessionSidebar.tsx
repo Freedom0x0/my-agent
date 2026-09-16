@@ -2,7 +2,12 @@ import { useEffect } from "react";
 import { Conversations } from "@ant-design/x";
 import type { ConversationItemType } from "@ant-design/x";
 import type { MenuProps } from "antd";
-import { PlusOutlined, SettingOutlined, UserOutlined } from "@ant-design/icons";
+import {
+  MenuFoldOutlined,
+  PlusOutlined,
+  SettingOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
 
 import { useAppStore } from "../hooks/useAppStore";
 
@@ -27,6 +32,7 @@ export function SessionSidebar() {
   const createSession = useAppStore((s) => s.createSession);
   const loadSessions = useAppStore((s) => s.loadSessions);
   const removeSessionLocal = useAppStore((s) => s.removeSessionLocal);
+  const togglePanel = useAppStore((s) => s.togglePanel);
 
   useEffect(() => {
     if (sessions.length === 0) loadSessions();
@@ -61,6 +67,15 @@ export function SessionSidebar() {
           data-testid="new-task-btn"
         >
           <PlusOutlined /> 新工作任务
+        </button>
+        <button
+          type="button"
+          className="panel-collapse-btn"
+          onClick={() => togglePanel("sider")}
+          aria-label="收起会话列表"
+          data-testid="collapse-sider"
+        >
+          <MenuFoldOutlined />
         </button>
       </div>
 

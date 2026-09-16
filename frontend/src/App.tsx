@@ -9,12 +9,8 @@ import {
 import type { BubbleItemType } from "@ant-design/x/es/bubble";
 import {
   BarChartOutlined,
-  CaretLeftOutlined,
-  CaretRightOutlined,
   ClearOutlined,
   FileSearchOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
   MergeCellsOutlined,
   RobotOutlined,
   StopOutlined,
@@ -98,7 +94,6 @@ export function App() {
   const abortStream = useAppStore((s) => s.abortStream);
   const clearError = useAppStore((s) => s.clearError);
   const error = useAppStore((s) => s.error);
-  const togglePanel = useAppStore((s) => s.togglePanel);
   const setPanelWidth = useAppStore((s) => s.setPanelWidth);
 
   const isProcessing = status === "processing";
@@ -150,15 +145,6 @@ export function App() {
             </div>
           </div>
         </header>
-
-        <div className="panel-toolbar">
-          <button className="panel-btn" onClick={() => togglePanel("sider")} aria-label="切换会话列表">
-            {panel.siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-          </button>
-          <button className="panel-btn" onClick={() => togglePanel("preview")} aria-label="切换预览面板">
-            {panel.previewCollapsed ? <CaretLeftOutlined /> : <CaretRightOutlined />}
-          </button>
-        </div>
 
         <main className="workspace">
           <aside

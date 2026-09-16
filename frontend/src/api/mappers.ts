@@ -9,6 +9,7 @@ import type {
 import type {
   ChatResponse,
   FileUploadResponse,
+  MessageDto,
   SheetInspectionDto,
   ToolCallResultDto,
 } from "./contracts";
@@ -94,4 +95,32 @@ export function mapChatResponseToAssistantMessage(
     sheets: resp.sheets ?? [],
     timestamp: Date.now(),
   };
+}
+
+function extractText(content: MessageDto["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((b): b is { type: string; text?: string } =>
+      typeof b === "object" && b !== null && (b as { type?: unknown }).type === "text")
+    .map((b) => b.text ?? "")
+    .join("");
+}
+
+export function mapSessionMessages(raw: MessageDto[]): ChatMessage[] {
+  return raw.map((m, idx) => {
+    const lastToolCall = m.tool_calls?.[m.tool_calls.length - 1];
+    const outId = (m.tool_calls ?? []).reduce<string | null>(
+      (acc, t) => t.output_id ?? acc,
+      null,
+    );
+    return {
+      id: `loaded-${idx}`,
+      role: m.role,
+      content: extractText(m.content),
+      toolCalls: m.tool_calls?.map(mapToolCall),
+      outputId: outId,
+      sheets: lastToolCall?.output_id ? [] : [],
+      timestamp: Date.now(),
+    };
+  });
 }
