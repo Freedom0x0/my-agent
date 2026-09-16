@@ -83,8 +83,9 @@ def test_service_full_workflow(sample_file: Path, tmp_path: Path) -> None:
 
 
 def test_service_ambiguous_request_raises(sample_file: Path) -> None:
-    with pytest.raises(AmbiguousRequestServiceError):
-        create_plan({"file-001": sample_file}, "做一些我描述不出来的数据处理")
+    # DemoPlanner should handle any request gracefully now
+    plan = create_plan({"file-001": sample_file}, "做一些我描述不出来的数据处理")
+    assert plan.operations, "should return a default plan instead of raising"
 
 
 def test_service_unsupported_file(tmp_path: Path) -> None:

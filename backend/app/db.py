@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,11 @@ CREATE TABLE IF NOT EXISTS outputs (
   result_json TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id TEXT PRIMARY KEY,
+  messages_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 """
 
@@ -149,3 +155,142 @@ def get_output(db_path: Path, output_id: str) -> OutputRecord | None:
         status=row["status"],
         created_at=row["created_at"],
     )
+
+
+# ----- session messages persistence (debug-only; not reloaded on startup) -----
+
+
+def save_session_messages(db_path: Path, session_id: str, messages: list[Any]) -> None:
+    """Upsert the latest messages snapshot for a session. Debug-only — not read on startup."""
+    payload = json.dumps(messages, ensure_ascii=False)
+    updated_at = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO sessions (session_id, messages_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET messages_json = excluded.messages_json, "
+            "updated_at = excluded.updated_at",
+            (session_id, payload, updated_at),
+        )
+        conn.commit()
+
+
+def get_session_messages(db_path: Path, session_id: str) -> list[Any] | None:
+    """Read back a session's messages if any. Returns None when the row is missing."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT messages_json FROM sessions WHERE session_id = ?", (session_id,))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return json.loads(row["messages_json"])
+
+
+# ----- session listing for sidebar -----
+
+
+def _derive_title(messages: list[Any]) -> str:
+    """Take the first user message, strip to 30 chars; fall back to a placeholder."""
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            text = "".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        else:
+            text = str(content or "")
+        text = text.strip().replace("\n", " ")
+        if text:
+            return text[:30] + ("…" if len(text) > 30 else "")
+    return "新会话"
+
+
+def _derive_last_user_msg(messages: list[Any]) -> str:
+    for m in reversed(messages):
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            text = "".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        else:
+            text = str(content or "")
+        text = text.strip().replace("\n", " ")
+        if text:
+            return text[:40] + ("…" if len(text) > 40 else "")
+    return ""
+
+
+def _extract_output_ids(messages: list[Any]) -> list[str]:
+    """Grep output_id out of any persisted tool_use/tool_result blocks (best-effort)."""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                oid = block.get("output_id")
+                if isinstance(oid, str) and oid and oid not in seen:
+                    ids.append(oid)
+                    seen.add(oid)
+    return ids
+
+
+def list_sessions(db_path: Path) -> list[dict[str, Any]]:
+    """Return one summary row per session, newest first."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT session_id, messages_json, updated_at FROM sessions ORDER BY updated_at DESC"
+        ).fetchall()
+    summaries: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            messages = json.loads(row["messages_json"])
+        except (TypeError, ValueError):
+            messages = []
+        summaries.append(
+            {
+                "session_id": row["session_id"],
+                "title": _derive_title(messages),
+                "updated_at": row["updated_at"],
+                "message_count": len(messages),
+                "last_user_msg": _derive_last_user_msg(messages),
+            }
+        )
+    return summaries
+
+
+def get_session_detail(db_path: Path, session_id: str) -> dict[str, Any] | None:
+    """Return one session's full detail (messages + extracted metadata) or None."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT session_id, messages_json, updated_at FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        messages = json.loads(row["messages_json"])
+    except (TypeError, ValueError):
+        messages = []
+    return {
+        "session_id": row["session_id"],
+        "title": _derive_title(messages),
+        "updated_at": row["updated_at"],
+        "message_count": len(messages),
+        "last_user_msg": _derive_last_user_msg(messages),
+        "messages": messages,
+        "output_ids": _extract_output_ids(messages),
+    }

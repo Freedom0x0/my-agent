@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .api.chat import create_chat_router
 from .api.routes import create_router
 from .config import get_settings
 from .schemas import HealthResponse
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=exc.status_code, content={"message": str(exc.detail)})
 
     app.include_router(create_router())
+    app.include_router(create_chat_router())
     return app
 
 

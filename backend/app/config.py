@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    APP_MODE: str = "demo"
+    APP_MODE: str = "llm"
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
     APP_DATA_DIR: str = "runtime"
@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     MODEL_NAME: str = ""
     MODEL_API_STYLE: str = "auto"  # "auto" | "openai" | "anthropic"
 
-    CORS_ORIGINS: str = "http://localhost:5173"
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
 
 
 @lru_cache()

@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from ..schemas import (
+from ...schemas import (
     CompareOperation,
     CreateIssueSheetOperation,
     DeduplicateOperation,

@@ -1,0 +1,1 @@
+"""MCP (Model Context Protocol) layer — tablex_* tools for the MiniMax agent."""

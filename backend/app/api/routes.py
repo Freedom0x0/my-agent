@@ -18,11 +18,13 @@ from ..db import (
     OutputRecord,
     get_file,
     get_output,
+    get_session_detail,
     init_db,
     insert_file,
     insert_output,
+    list_sessions,
 )
-from ..domain.operations import (
+from ..domain._archive.operations import (
     ConfirmationRequired,
     InvalidPlanError,
     expected_confirmation_token,
@@ -290,5 +292,19 @@ def create_router() -> APIRouter:
         events = rec.result.get("audit_events", [])
         conclusions = rec.result.get("conclusions", [])
         return AuditResponse(output_id=output_id, events=events, conclusions=conclusions)
+
+    @router.get("/sessions")
+    async def list_sessions_route() -> dict[str, Any]:
+        return {"sessions": list_sessions(_db_path())}
+
+    @router.get(
+        "/sessions/{session_id}",
+        responses={404: {"model": ErrorResponse}},
+    )
+    async def get_session_route(session_id: str) -> dict[str, Any]:
+        detail = get_session_detail(_db_path(), session_id)
+        if detail is None:
+            raise _build_error("session_not_found", f"未找到会话 {session_id}", 404)
+        return detail
 
     return router

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ..schemas import OperationPlan, SheetRef, WorkbookInspection
+from ...schemas import OperationPlan, SheetRef, WorkbookInspection
 
 
 class Planner(Protocol):

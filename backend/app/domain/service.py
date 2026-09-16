@@ -1,4 +1,8 @@
-"""Workflow orchestration for the API."""
+"""Workflow orchestration for the API.
+
+The /api/plans and /api/executions routes use the archived DSL planners + the
+legacy `execute_plan` codepath. The MCP / MiniMax flow doesn't touch this module.
+"""
 from __future__ import annotations
 
 import uuid
@@ -8,8 +12,8 @@ from typing import Iterable
 import pandas as pd
 
 from ..config import get_settings
-from ..llm.demo import DemoPlanner
-from ..llm.base import Planner
+from ..llm._archive.demo import DemoPlanner
+from ..llm._archive.base import Planner
 from ..schemas import (
     ExecutionResult,
     OperationPlan,
@@ -41,18 +45,17 @@ class AmbiguousRequestServiceError(ServiceError):
 
 def _build_planner() -> Planner:
     settings = get_settings()
-    if settings.APP_MODE == "llm":
-        from ..llm.compatible import CompatiblePlanner
-        try:
-            return CompatiblePlanner(
-                base_url=settings.MODEL_BASE_URL,
-                api_key=settings.MODEL_API_KEY,
-                model_name=settings.MODEL_NAME,
-                api_style=settings.MODEL_API_STYLE,
-            )
-        except Exception:
-            return DemoPlanner()
-    return DemoPlanner()
+    from ..llm._archive.compatible import CompatiblePlanner
+    try:
+        return CompatiblePlanner(
+            base_url=settings.MODEL_BASE_URL,
+            api_key=settings.MODEL_API_KEY,
+            model_name=settings.MODEL_NAME,
+            api_style=settings.MODEL_API_STYLE,
+        )
+    except Exception:
+        from ..llm._archive.demo import DemoPlanner
+        return DemoPlanner()
 
 
 def _assign_file_ids(paths: Iterable[Path]) -> dict[Path, str]:

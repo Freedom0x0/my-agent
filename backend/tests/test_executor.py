@@ -9,7 +9,7 @@ from backend.app.domain.executor import (
     execute_plan,
     file_sha256,
 )
-from backend.app.domain.operations import (
+from backend.app.domain._archive.operations import (
     ConfirmationRequired,
     InvalidPlanError,
 )

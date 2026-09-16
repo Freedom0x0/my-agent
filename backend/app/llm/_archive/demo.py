@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
-from ..schemas import (
+from ...schemas import (
     ColumnInspection,
     CompareOperation,
     CreateIssueSheetOperation,
@@ -231,7 +231,46 @@ class DemoPlanner:
                 requires_confirmation=False,
             )
 
-        # Fallback: explicit unrecognized request
-        raise AmbiguousRequestError(
-            "无法理解任务，请明确描述：检查/去重/筛选/补公式/对比 等关键词",
-        )
+        # Pattern 6: pure summarize (without "检查" keyword)
+        if "汇总" in text or "合计" in text or "统计" in text:
+            try:
+                resolved = _resolve_columns(primary_sheet, ["部门", "金额"])
+                key_col = resolved["部门"]
+            except AmbiguousRequestError:
+                try:
+                    resolved = _resolve_columns(primary_sheet, ["金额"])
+                    key_col = resolved["金额"]
+                except AmbiguousRequestError:
+                    raise AmbiguousRequestError("找不到可用于汇总的列（需要部门/金额类字段）")
+            ops = [
+                GroupSummaryOperation(
+                    sheet=primary_ref, group_by=[key_col],
+                    metrics={resolved["金额"]: ["sum"]}, output_sheet="汇总结果",
+                ),
+            ]
+            return OperationPlan(id=plan_id, source_sheets=[primary_ref], operations=ops,
+                outputs=["清洗后数据", "汇总结果"], explanation="按金额汇总",
+                requires_confirmation=False)
+
+        # Pattern 7: generic cleanup (normalize numeric columns + issue sheet)
+        try:
+            numeric_cols = [c.name for c in primary_sheet.columns
+                           if c.inferred_type in ("mixed", "number", "text")
+                           and c.null_count < c.row_count * 0.5]
+            numeric_targets = numeric_cols[:3]
+        except Exception:
+            numeric_targets = [c.name for c in primary_sheet.columns][:1]
+
+        if numeric_targets:
+            ops = [
+                NormalizeOperation(sheet=primary_ref, columns=numeric_targets, target_type="number"),
+                CreateIssueSheetOperation(output_sheet="问题清单"),
+            ]
+            return OperationPlan(id=plan_id, source_sheets=[primary_ref], operations=ops,
+                outputs=["清洗后数据", "问题清单"],
+                explanation="统一数据格式并生成问题清单", requires_confirmation=False)
+
+        # Fallback: just create an issue sheet
+        return OperationPlan(id=plan_id, source_sheets=[primary_ref],
+            operations=[CreateIssueSheetOperation(output_sheet="问题清单")],
+            outputs=["问题清单"], explanation="生成数据问题清单", requires_confirmation=False)

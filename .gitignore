@@ -19,3 +19,8 @@ runtime/
 # Test
 .coverage
 htmlcov/
+
+# Env / secrets
+.env
+.env.*
+!.env.example

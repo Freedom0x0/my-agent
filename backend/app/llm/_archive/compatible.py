@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from ..schemas import OperationPlan, SheetRef, WorkbookInspection
+from ...schemas import OperationPlan, SheetRef, WorkbookInspection
 
 
 class ModelConfigError(RuntimeError):
@@ -96,6 +96,20 @@ def _normalize_plan_dict(plan_dict: dict) -> dict:
         plan_dict["outputs"] = _coerce_list(plan_dict["outputs"])
     if "source_sheets" in plan_dict:
         plan_dict["source_sheets"] = _coerce_list(plan_dict["source_sheets"])
+    source_set = set(plan_dict.get("source_sheets") or [])
+    # Strip compare operations referencing non-source sheets
+    if source_set:
+        filtered_ops = []
+        for op in plan_dict.get("operations") or []:
+            if not isinstance(op, dict):
+                continue
+            if op.get("kind") == "compare":
+                left = op.get("left_sheet", "")
+                right = op.get("right_sheet", "")
+                if left not in source_set or right not in source_set:
+                    continue  # skip compare that references an output, not a source
+            filtered_ops.append(op)
+        plan_dict["operations"] = filtered_ops
     # Ensure requires_confirmation is set when high-impact ops are present
     high_impact = {"deduplicate", "fill_formula"}
     if any(isinstance(op, dict) and op.get("kind") in high_impact for op in plan_dict.get("operations") or []):

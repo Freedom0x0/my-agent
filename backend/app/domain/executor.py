@@ -27,7 +27,7 @@ from ..schemas import (
     OperationPlan,
 )
 from .audit import audit_events_to_rows, make_audit_event, make_conclusion
-from .operations import (
+from ._archive.operations import (
     ConfirmationRequired,
     HIGH_IMPACT_KINDS,
     InvalidPlanError,
@@ -334,6 +334,75 @@ def _render_formula(expression: str, column_index: dict[str, int], row: int) -> 
                 raise InvalidPlanError(f"公式引用了不存在的列 {ph}")
             rendered = rendered.replace("{" + ph + "}", f"{_col_letter(col)}{row}", 1)
     return "=" + rendered
+
+
+def _apply_sort(df: pd.DataFrame, *, column: str, order: str = "asc") -> tuple[pd.DataFrame, list[int]]:
+    """Sort DataFrame by `column`. `order` is 'asc' or 'desc'."""
+    if column not in df.columns:
+        raise InvalidPlanError(f"列 {column} 不存在")
+    ascending = order != "desc"
+    new_df = df.sort_values(by=column, ascending=ascending, kind="stable").reset_index(drop=True)
+    source_rows = (
+        new_df[INTERNAL_COL].tolist()
+        if INTERNAL_COL in new_df.columns
+        else list(range(1, len(new_df) + 1))
+    )
+    return new_df, source_rows[:MAX_AFFECTED_ROWS]
+
+
+def _apply_fill_null(
+    df: pd.DataFrame,
+    *,
+    column: str,
+    method: str,
+    value: Any = None,
+) -> tuple[pd.DataFrame, list[int]]:
+    """Fill null/empty values in `column`. `method` ∈ {mean, ffill, bfill, value}."""
+    if column not in df.columns:
+        raise InvalidPlanError(f"列 {column} 不存在")
+    new_df = df.copy()
+    series = new_df[column]
+    null_mask = series.isna() | series.astype(str).str.strip().isin(["", "nan", "None"])
+    source_rows = (
+        new_df[INTERNAL_COL].tolist()
+        if INTERNAL_COL in new_df.columns
+        else list(range(1, len(new_df) + 1))
+    )
+    col_idx = new_df.columns.get_loc(column)
+    affected: list[int] = []
+
+    if method == "mean":
+        numeric = series.apply(_to_number).dropna()
+        if numeric.empty:
+            return new_df, []
+        fill_value = float(numeric.mean())
+        for idx in range(len(new_df)):
+            if bool(null_mask.iloc[idx]):
+                new_df.iat[idx, col_idx] = fill_value
+                affected.append(int(source_rows[idx]))
+    elif method == "ffill":
+        filled = series.ffill()
+        for idx in range(len(new_df)):
+            if bool(null_mask.iloc[idx]):
+                new_df.iat[idx, col_idx] = filled.iloc[idx]
+                affected.append(int(source_rows[idx]))
+    elif method == "bfill":
+        filled = series.bfill()
+        for idx in range(len(new_df)):
+            if bool(null_mask.iloc[idx]):
+                new_df.iat[idx, col_idx] = filled.iloc[idx]
+                affected.append(int(source_rows[idx]))
+    elif method == "value":
+        if value is None:
+            return new_df, []
+        for idx in range(len(new_df)):
+            if bool(null_mask.iloc[idx]):
+                new_df.iat[idx, col_idx] = value
+                affected.append(int(source_rows[idx]))
+    else:
+        raise InvalidPlanError(f"不支持的填充方式 {method}")
+
+    return new_df, sorted(set(affected))[:MAX_AFFECTED_ROWS]
 
 
 def _apply_fill_formula(df: pd.DataFrame, op: FillFormulaOperation) -> tuple[pd.DataFrame, list[int]]:
