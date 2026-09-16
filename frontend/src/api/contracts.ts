@@ -46,6 +46,9 @@ export const sessionDetailSchema = z.object({
   last_user_msg: z.string(),
   messages: z.array(messageDtoSchema),
   output_ids: z.array(z.string()),
+  has_more: z.boolean().optional(),
+  oldest_index: z.number().optional(),
+  total_messages: z.number().optional(),
 });
 
 export const chatRequestSchema = z.object({

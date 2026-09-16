@@ -106,20 +106,29 @@ function extractText(content: MessageDto["content"]): string {
     .join("");
 }
 
-export function mapSessionMessages(raw: MessageDto[]): ChatMessage[] {
+export function mapSessionMessages(
+  raw: MessageDto[],
+  sessionId?: string,
+  baseIndex?: number,
+): ChatMessage[] {
   return raw.map((m, idx) => {
-    const lastToolCall = m.tool_calls?.[m.tool_calls.length - 1];
     const outId = (m.tool_calls ?? []).reduce<string | null>(
       (acc, t) => t.output_id ?? acc,
       null,
     );
+    const position = (baseIndex ?? 0) + idx;
+    const id = sessionId ? `${sessionId}-${position}` : `loaded-${position}`;
+    // Backend schema doesn't persist per-message `sheets`; they live on the
+    // session-level `output_ids` map. Lazy-loaded messages therefore won't get
+    // SheetLink buttons — acceptable for v1, add a `sheets` field to messageDtoSchema
+    // to upgrade.
     return {
-      id: `loaded-${idx}`,
+      id,
       role: m.role,
       content: extractText(m.content),
       toolCalls: m.tool_calls?.map(mapToolCall),
       outputId: outId,
-      sheets: lastToolCall?.output_id ? [] : [],
+      sheets: [],
       timestamp: Date.now(),
     };
   });

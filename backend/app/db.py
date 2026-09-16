@@ -271,8 +271,22 @@ def list_sessions(db_path: Path) -> list[dict[str, Any]]:
     return summaries
 
 
-def get_session_detail(db_path: Path, session_id: str) -> dict[str, Any] | None:
-    """Return one session's full detail (messages + extracted metadata) or None."""
+def get_session_detail(
+    db_path: Path,
+    session_id: str,
+    *,
+    limit: int | None = None,
+    before_index: int | None = None,
+) -> dict[str, Any] | None:
+    """Return one session's detail (messages + extracted metadata) or None.
+
+    Lazy-load contract:
+      * `limit`        — return at most N messages from the tail end of the full history.
+      * `before_index` — slice the history to messages with positional index < before_index.
+      * The response always carries `total_messages`, `oldest_index` (the index of the
+        first message in the returned page, or 0 if empty), and `has_more` (whether
+        older messages exist before the page).
+    """
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -285,12 +299,29 @@ def get_session_detail(db_path: Path, session_id: str) -> dict[str, Any] | None:
         messages = json.loads(row["messages_json"])
     except (TypeError, ValueError):
         messages = []
+
+    total_messages = len(messages)
+    if before_index is not None and before_index >= 0:
+        messages = messages[:before_index]
+        total_messages = len(messages)
+    if limit is not None and limit > 0 and len(messages) > limit:
+        page = messages[-limit:]
+        has_more = True
+    else:
+        page = messages
+        has_more = False
+
+    oldest_index = max(0, len(messages) - len(page))
+
     return {
         "session_id": row["session_id"],
         "title": _derive_title(messages),
         "updated_at": row["updated_at"],
-        "message_count": len(messages),
+        "message_count": total_messages,
         "last_user_msg": _derive_last_user_msg(messages),
-        "messages": messages,
+        "messages": page,
         "output_ids": _extract_output_ids(messages),
+        "has_more": has_more,
+        "oldest_index": oldest_index,
+        "total_messages": total_messages,
     }

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { App } from "../App";
 import { api } from "../api/httpClient";
@@ -329,5 +329,255 @@ describe("SSE streaming flow", () => {
     expect(useAppStore.getState().status).toBe("idle");
     expect(useAppStore.getState().streamingContent).toBe("");
     expect(useAppStore.getState().streamController).toBeNull();
+  });
+});
+
+describe("P. Bubble interaction", () => {
+  function seedAssistantMessage(): string {
+    const id = "assistant-msg-1";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "处理完成，文件 = 清洗后数据",
+          toolCalls: [],
+          outputId: null,
+          sheets: ["清洗后数据"],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    return id;
+  }
+
+  function seedUserMessage(): string {
+    const id = "user-msg-1";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "user",
+          content: "原始文本",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    return id;
+  }
+
+  it("copy button writes assistant content to clipboard and shows 已复制", async () => {
+    const id = seedAssistantMessage();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    render(<App />);
+    const btn = screen.getByTestId(`copy-btn-${id}`);
+    fireEvent.click(btn);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("处理完成，文件 = 清洗后数据"));
+    expect(btn.textContent).toContain("已复制");
+  });
+
+  it("thumb up / down toggle reaction in store (mutually exclusive)", () => {
+    const id = seedAssistantMessage();
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId(`thumb-up-${id}`));
+    expect(useAppStore.getState().messageReactions[id]).toBe("up");
+
+    fireEvent.click(screen.getByTestId(`thumb-down-${id}`));
+    expect(useAppStore.getState().messageReactions[id]).toBe("down");
+
+    fireEvent.click(screen.getByTestId(`thumb-down-${id}`));
+    expect(useAppStore.getState().messageReactions[id]).toBeNull();
+  });
+
+  it("edit a user message shows textarea; save truncates and triggers sendMessage", async () => {
+    const originalSend = useAppStore.getState().sendMessage;
+    const sendSpy = vi.fn(async (text: string) => originalSend(text));
+    useAppStore.setState({ sendMessage: sendSpy } as Partial<typeof useAppStore.getState>);
+
+    const id = seedUserMessage();
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId(`user-bubble-edit-${id}`));
+    const ta = screen.getByTestId(`user-bubble-textarea-${id}`) as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: "改写后的文本" } });
+    fireEvent.click(screen.getByTestId(`user-bubble-save-${id}`));
+
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith("改写后的文本"));
+    expect(useAppStore.getState().messages[0].content).toBe("改写后的文本");
+  });
+
+  afterEach(() => {
+    Object.assign(navigator, { clipboard: undefined });
+  });
+});
+
+describe("Q. Markdown rendering", () => {
+  it("renders assistant content via MarkdownContent (paragraphs + code block + sheet link)", () => {
+    const id = "md-1";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "已完成清洗，结果是 清洗后数据。\n\n```python\nprint(1)\n```",
+          toolCalls: [],
+          outputId: "out-1",
+          sheets: ["清洗后数据"],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    const md = screen.getByTestId(`assistant-bubble-${id}`);
+    expect(md.querySelector(".markdown-content")).toBeInTheDocument();
+    expect(md.querySelector("pre")).toBeInTheDocument();
+    const link = screen.getByTestId("sheet-link");
+    expect(link.textContent).toContain("清洗后数据");
+  });
+});
+
+describe("R. Tool progress", () => {
+  it("renders ToolProgressBar when assistant message has tool calls", () => {
+    const id = "r-1";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "完成",
+          toolCalls: [
+            { tool: "tablex_normalize", status: "ok", summary: "统一金额格式" },
+            { tool: "tablex_export", status: "ok", summary: "导出结果", outputId: "out-1" },
+          ],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    expect(screen.getByTestId(`tool-progress-${id}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`tool-progress-toggle-${id}`).textContent).toContain("已完成 2 个工具调用");
+  });
+
+  it("hides ToolProgressBar when no tool calls", () => {
+    const id = "r-2";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "纯文本回复",
+          toolCalls: [],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    expect(screen.queryByTestId(`tool-progress-${id}`)).toBeNull();
+  });
+
+  it("toggles the tool timeline on click", () => {
+    const id = "r-3";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "完成",
+          toolCalls: [{ tool: "tablex_inspect", status: "ok", summary: "扫描空值" }],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    expect(screen.queryByTestId(`tool-timeline-${id}`)).toBeNull();
+    fireEvent.click(screen.getByTestId(`tool-progress-toggle-${id}`));
+    expect(screen.getByTestId(`tool-timeline-${id}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`tool-timeline-${id}`).textContent).toContain("tablex_inspect");
+  });
+});
+
+describe("S. Lazy load older", () => {
+  it("selectSession loads latest 20 with has_more + oldest_index from API", async () => {
+    mockedApi.getSession.mockResolvedValueOnce({
+      session_id: "sid",
+      title: "test",
+      updated_at: "2026-01-01T00:00:00Z",
+      message_count: 30,
+      last_user_msg: "first user",
+      messages: Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `msg-${i + 20}`,
+      })),
+      output_ids: [],
+      has_more: true,
+      oldest_index: 20,
+      total_messages: 30,
+    });
+    render(<App />);
+    await useAppStore.getState().selectSession("sid");
+    await waitFor(() => expect(mockedApi.getSession).toHaveBeenCalledWith("sid", expect.objectContaining({ limit: 20 })));
+    const s = useAppStore.getState();
+    expect(s.messages.length).toBe(10);
+    expect(s.sessionHasMore["sid"]).toBe(true);
+    expect(s.oldestLoadedIndexBySession["sid"]).toBe(20);
+  });
+
+  it("scrolling to top triggers loadOlderMessages with before_index and prepends messages", async () => {
+    const sid = "lazy-sess";
+    const olderMessages = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `msg-${i + 10}`,
+    }));
+
+    render(<App />);
+    await waitFor(() => useAppStore.getState().status !== "uploading");
+
+    const initialMessages = Array.from({ length: 20 }, (_, i) => ({
+      id: `${sid}-${i + 20}`,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `msg-${i + 20}`,
+      timestamp: Date.now(),
+    })) as any[];
+
+    useAppStore.setState({
+      currentSessionId: sid,
+      messages: initialMessages,
+      sessionHasMore: { [sid]: true },
+      oldestLoadedIndexBySession: { [sid]: 20 },
+    } as Partial<typeof useAppStore.getState>);
+
+    mockedApi.getSession.mockResolvedValueOnce({
+      session_id: sid,
+      title: "test",
+      updated_at: "2026-01-01T00:00:00Z",
+      message_count: 30,
+      last_user_msg: "",
+      messages: olderMessages,
+      output_ids: [],
+      has_more: false,
+      oldest_index: 10,
+      total_messages: 30,
+    });
+
+    const scrollEl = await screen.findByTestId("chat-history");
+    Object.defineProperty(scrollEl, "scrollTop", { value: 0, configurable: true });
+    Object.defineProperty(scrollEl, "scrollHeight", { value: 1000, configurable: true });
+    fireEvent.scroll(scrollEl);
+
+    await waitFor(() =>
+      expect(mockedApi.getSession).toHaveBeenCalledWith(sid, expect.objectContaining({ limit: 20, beforeIndex: 20 })),
+    );
+    await waitFor(() => expect(useAppStore.getState().messages.length).toBe(30));
+    expect(useAppStore.getState().sessionHasMore[sid]).toBe(false);
   });
 });

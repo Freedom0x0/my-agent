@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from ..config import get_settings
@@ -301,8 +301,17 @@ def create_router() -> APIRouter:
         "/sessions/{session_id}",
         responses={404: {"model": ErrorResponse}},
     )
-    async def get_session_route(session_id: str) -> dict[str, Any]:
-        detail = get_session_detail(_db_path(), session_id)
+    async def get_session_route(
+        session_id: str,
+        limit: int | None = Query(default=None, ge=1, le=500),
+        before_index: int | None = Query(default=None, ge=0),
+    ) -> dict[str, Any]:
+        detail = get_session_detail(
+            _db_path(),
+            session_id,
+            limit=limit,
+            before_index=before_index,
+        )
         if detail is None:
             raise _build_error("session_not_found", f"未找到会话 {session_id}", 404)
         return detail

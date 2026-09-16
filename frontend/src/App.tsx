@@ -19,11 +19,13 @@ import {
   VerticalRightOutlined,
 } from "@ant-design/icons";
 
+import { ChatScroll } from "./components/chat/ChatScroll";
 import { Previewer } from "./components/Previewer";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SenderPopover } from "./components/SenderPopover";
+import { AssistantBubble } from "./components/bubble/AssistantBubble";
+import { UserBubble } from "./components/bubble/UserBubble";
 import { useAppStore, bootstrapApp } from "./hooks/useAppStore";
-import type { ChatMessage } from "./domain/models";
 
 const theme = {
   token: {
@@ -57,36 +59,6 @@ const PROMPTS = [
   { key: "merge", icon: <MergeCellsOutlined />, label: "合并多个工作表", description: "跨 sheet 按公共字段对齐" },
 ];
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function SheetLink({ name, outputId }: { name: string; outputId: string | null }) {
-  const showOutput = useAppStore((s) => s.showOutput);
-  if (!outputId) return <span>{name}</span>;
-  return (
-    <button type="button" className="sheet-link" data-testid="sheet-link" onClick={() => showOutput(outputId)}>
-      {name}
-    </button>
-  );
-}
-function renderAssistantText(message: ChatMessage): React.ReactNode {
-  const text = message.content;
-  const sheets = message.sheets ?? [];
-  if (!text) return null;
-  if (!sheets.length) return text;
-  const names = [...sheets].sort((a, b) => b.length - a.length);
-  const re = new RegExp(`(${names.map(escapeRegex).join("|")})`, "g");
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  for (const m of text.matchAll(re)) {
-    if (m.index! > last) parts.push(text.slice(last, m.index));
-    parts.push(<SheetLink key={m.index} name={m[0]} outputId={message.outputId ?? null} />);
-    last = m.index! + m[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
-}
-
 export function App() {
   const status = useAppStore((s) => s.status);
   const messages = useAppStore((s) => s.messages);
@@ -111,13 +83,23 @@ export function App() {
   const bubbleItems: BubbleItemType[] = messages.map((m) => ({
     key: m.id,
     role: m.role === "user" ? "user" : "assistant",
-    content: m.role !== "user" ? renderAssistantText(m) : m.content,
+    content: m.role !== "user" ? <AssistantBubble message={m} /> : <UserBubble message={m} />,
   }));
   if (streamingMessageId && streamingContent) {
     bubbleItems.push({
       key: streamingMessageId,
       role: "assistant",
-      content: streamingContent,
+      content: (
+        <AssistantBubble
+          isStreaming
+          message={{
+            id: streamingMessageId,
+            role: "assistant",
+            content: streamingContent,
+            timestamp: Date.now(),
+          }}
+        />
+      ),
     });
   }
 
@@ -201,7 +183,7 @@ export function App() {
                 <span className="chat-error-dismiss">×</span>
               </div>
             )}
-            <div className="chat-scroll" data-testid="chat-history">
+            <ChatScroll testId="chat-history">
               {messages.length === 0 ? (
                 <div className="chat-empty">
                   <Welcome icon={
@@ -220,7 +202,7 @@ export function App() {
               ) : (
                 <Bubble.List role={BUBBLE_ROLE} items={bubbleItems} autoScroll />
               )}
-            </div>
+            </ChatScroll>
             <div className="chat-input-wrap">
               <SenderPopover
                 value={input}

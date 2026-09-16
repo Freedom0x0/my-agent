@@ -12,7 +12,9 @@ type Set = (
 ) => void;
 type Get = () => WorkflowState & Actions;
 
-export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions" | "selectSession" | "createSession" | "removeSessionLocal"> {
+export const SESSION_PAGE_LIMIT = 20;
+
+export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions" | "selectSession" | "createSession" | "removeSessionLocal" | "loadOlderMessages"> {
   return {
     loadSessions: async () => {
       set({ sessionsLoading: true });
@@ -48,13 +50,19 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         lastChatOutputId: null,
         previewError: null,
         streamingContent: "",
+        messageReactions: {},
       });
       localStorage.setItem(SESSION_KEY, id);
       try {
-        const detail = await api.getSession(id);
+        const detail = await api.getSession(id, { limit: SESSION_PAGE_LIMIT });
+        const total = detail.total_messages ?? detail.messages.length;
+        const oldestIndex = detail.oldest_index ?? Math.max(0, total - detail.messages.length);
+        const mapped = mapSessionMessages(detail.messages, id, oldestIndex);
         set({
           outputIds: detail.output_ids ?? [],
-          messages: mapSessionMessages(detail.messages ?? []),
+          messages: mapped,
+          sessionHasMore: { ...get().sessionHasMore, [id]: detail.has_more ?? false },
+          oldestLoadedIndexBySession: { ...get().oldestLoadedIndexBySession, [id]: oldestIndex },
         });
       } catch (err) {
         if (err instanceof ApiError) {
@@ -80,6 +88,7 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         lastChatOutputId: null,
         previewError: null,
         streamingContent: "",
+        messageReactions: {},
       });
       localStorage.setItem(SESSION_KEY, id);
       return id;
@@ -96,6 +105,35 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         activeTabBySession: restActive,
         ...(currentSessionId === id ? initial : {}),
       });
+    },
+
+    loadOlderMessages: async () => {
+      const s = get();
+      const sid = s.currentSessionId;
+      if (!sid || s.sessionLoadingOlder) return;
+      if (!(s.sessionHasMore[sid] ?? false)) return;
+      const oldestIdx = s.oldestLoadedIndexBySession[sid] ?? 0;
+      set({ sessionLoadingOlder: true });
+      try {
+        const detail = await api.getSession(sid, {
+          limit: SESSION_PAGE_LIMIT,
+          beforeIndex: oldestIdx,
+        });
+        const total = detail.total_messages ?? detail.messages.length;
+        const newOldestIndex = detail.oldest_index ?? Math.max(0, total - detail.messages.length);
+        const mapped = mapSessionMessages(detail.messages, sid, newOldestIndex);
+        set((cur) => ({
+          messages: [...mapped, ...cur.messages],
+          sessionHasMore: { ...cur.sessionHasMore, [sid]: detail.has_more ?? false },
+          oldestLoadedIndexBySession: { ...cur.oldestLoadedIndexBySession, [sid]: newOldestIndex },
+          sessionLoadingOlder: false,
+        }));
+      } catch (err) {
+        set({ sessionLoadingOlder: false });
+        if (err instanceof ApiError) {
+          set({ error: makeUserFacingError(err.errorCode, err.message) });
+        }
+      }
     },
   };
 }

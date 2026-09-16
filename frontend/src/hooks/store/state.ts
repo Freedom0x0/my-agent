@@ -21,6 +21,8 @@ export type PanelState = {
   previewCollapsed: boolean;
 };
 
+export type ReactionValue = "up" | "down" | null;
+
 export type WorkflowState = {
   sessions: SessionSummary[];
   sessionsLoading: boolean;
@@ -44,6 +46,10 @@ export type WorkflowState = {
   lastChatSheets: string[];
   lastChatOutputId: string | null;
   error: UserFacingError | null;
+  messageReactions: Record<string, ReactionValue>;
+  sessionHasMore: Record<string, boolean>;
+  sessionLoadingOlder: boolean;
+  oldestLoadedIndexBySession: Record<string, number>;
 };
 
 export const initial: WorkflowState = {
@@ -74,6 +80,10 @@ export const initial: WorkflowState = {
   lastChatSheets: [],
   lastChatOutputId: null,
   error: null,
+  messageReactions: {},
+  sessionHasMore: {},
+  sessionLoadingOlder: false,
+  oldestLoadedIndexBySession: {},
 };
 
 export const SESSION_KEY = "tablex.current_session_id";

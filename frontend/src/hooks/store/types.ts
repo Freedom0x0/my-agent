@@ -2,7 +2,8 @@ import type { PreviewTarget, Tab } from "../../domain/workflow";
 
 // Re-export shared state types from state.ts so slice helpers can import
 // everything from one place.
-export type { WorkflowState, PanelState } from "./state";
+export type { WorkflowState, PanelState, ReactionValue } from "./state";
+import type { ReactionValue } from "./state";
 
 export type Actions = {
   // Sidebar
@@ -35,6 +36,12 @@ export type Actions = {
   // Panels
   setPanelWidth: (side: "sider" | "preview", width: number) => void;
   togglePanel: (side: "sider" | "preview") => void;
+
+  // Reactions (P)
+  toggleReaction: (msgId: string, reaction: ReactionValue) => void;
+
+  // Lazy load older (S)
+  loadOlderMessages: () => Promise<void>;
 
   // Error
   clearError: () => void;

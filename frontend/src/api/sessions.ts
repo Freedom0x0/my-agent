@@ -14,12 +14,21 @@ export function listSessions(
     .then((r) => r.sessions);
 }
 
+export type GetSessionOptions = RequestOptions & {
+  limit?: number;
+  beforeIndex?: number;
+};
+
 export function getSession(
   sessionId: string,
-  options?: RequestOptions,
+  options?: GetSessionOptions,
 ): Promise<SessionDetail> {
+  const params: string[] = [];
+  if (options?.limit != null) params.push(`limit=${options.limit}`);
+  if (options?.beforeIndex != null) params.push(`before_index=${options.beforeIndex}`);
+  const query = params.length ? `?${params.join("&")}` : "";
   return httpClient.getJson(
-    `/sessions/${encodeURIComponent(sessionId)}`,
+    `/sessions/${encodeURIComponent(sessionId)}${query}`,
     sessionDetailSchema,
     options,
   );
