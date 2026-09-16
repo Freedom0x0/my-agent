@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Attachments, FileCard } from "@ant-design/x";
-import type { AttachmentsProps } from "@ant-design/x";
+import { FileCard } from "@ant-design/x";
 import {
   CloseOutlined,
   DownloadOutlined,
@@ -17,12 +16,6 @@ import type { Tab } from "../domain/workflow";
 
 const ACCEPT = ACCEPTED_EXTENSIONS.join(",");
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
 export function Previewer() {
   const currentSessionId = useAppStore((s) => s.currentSessionId);
   const tabsBySession = useAppStore((s) => s.tabsBySession);
@@ -31,11 +24,11 @@ export function Previewer() {
   const outputPreviews = useAppStore((s) => s.outputPreviews);
   const previewError = useAppStore((s) => s.previewError);
   const status = useAppStore((s) => s.status);
-  const allFiles = useAppStore((s) => s.files);
   const removeFile = useAppStore((s) => s.removeFile);
   const removeTab = useAppStore((s) => s.removeTab);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const uploadFile = useAppStore((s) => s.uploadFile);
+  const addEmptyTab = useAppStore((s) => s.addEmptyTab);
 
   const tabs = currentSessionId ? tabsBySession[currentSessionId] ?? [] : [];
   const activeTabId = currentSessionId ? activeTabBySession[currentSessionId] ?? "" : "";
@@ -64,14 +57,27 @@ export function Previewer() {
     return null;
   }, [activeTab]);
 
-  const attachmentItems: AttachmentsProps["items"] = allFiles.map((f) => ({
-    uid: f.id,
-    name: f.name,
-    size: f.sizeBytes,
-    status: "done",
-    type: f.name.split(".").pop() ?? "",
-    description: formatSize(f.sizeBytes),
-  }));
+  const activeTabIsEmpty = activeTab?.kind === "file" && activeTab.refId === "";
+
+  const emptyDropzone = (
+    <div className="empty-state previewer-empty" data-testid="previewer-empty-dropzone">
+      <p className="empty-title">点击或拖入文件</p>
+      <p className="empty-sub">支持 Excel / CSV，单文件</p>
+      <FileCard
+        name="empty-dropzone"
+        className="previewer-dropzone"
+        role="button"
+        tabIndex={0}
+        data-testid="upload-dropzone"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <div className="dropzone-inner">
+          <div className="dropzone-icon">+</div>
+          <div className="dropzone-hint">选择文件</div>
+        </div>
+      </FileCard>
+    </div>
+  );
 
   return (
     <div className="previewer">
@@ -117,10 +123,9 @@ export function Previewer() {
         <button
           type="button"
           className="tab-add-btn"
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => currentSessionId && addEmptyTab(currentSessionId)}
           disabled={uploaderDisabled}
-          aria-label="添加新文件"
-          title="添加新文件（Excel/CSV）"
+          aria-label="新增标签"
           data-testid="tab-add-btn"
         >
           <PlusOutlined />
@@ -144,36 +149,19 @@ export function Previewer() {
         {tabs.length === 0 && (
           <div className="empty-state previewer-empty">
             <p className="empty-title">暂无打开的文件</p>
-            <p className="empty-sub">上传或打开文件后将在此处预览</p>
-            <Attachments
-              className="previewer-uploader"
-              disabled={uploaderDisabled}
-              accept={ACCEPT}
-              maxCount={1}
-              multiple={false}
-              beforeUpload={(file) => {
-                void uploadFile(file as unknown as File);
-                return false;
-              }}
-              items={attachmentItems}
-              data-testid="upload-attachments"
+            <p className="empty-sub">点击右上角 + 新增标签，或直接拖入文件</p>
+            <button
+              type="button"
+              className="empty-action-btn"
+              onClick={() => currentSessionId && addEmptyTab(currentSessionId)}
+              data-testid="empty-add-tab"
             >
-              <FileCard
-                name="dropzone"
-                className="previewer-dropzone"
-                role="button"
-                tabIndex={0}
-                data-testid="upload-dropzone"
-              >
-                <div className="dropzone-inner">
-                  <div className="dropzone-icon">+</div>
-                  <div className="dropzone-hint">点击或拖入 Excel/CSV</div>
-                </div>
-              </FileCard>
-            </Attachments>
+              <PlusOutlined /> 新增标签
+            </button>
           </div>
         )}
-        {tabs.length > 0 && activePreview && (
+        {activeTabIsEmpty && emptyDropzone}
+        {tabs.length > 0 && activePreview && !activeTabIsEmpty && (
           <SpreadsheetPreview
             preview={activePreview}
             activeSheet={activeSheet}
@@ -187,7 +175,7 @@ export function Previewer() {
             }
           />
         )}
-        {tabs.length > 0 && !activePreview && (
+        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && (
           <div className="empty-state previewer-empty">
             <p className="empty-title">{activeTab?.fileName ?? "加载中"}</p>
             <p className="empty-sub">正在解析该文件…</p>

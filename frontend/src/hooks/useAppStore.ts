@@ -56,6 +56,7 @@ type Actions = {
   showOutput: (outputId: string) => void;
   showFile: (fileId: string) => void;
   addTab: (sessionId: string, tab: Omit<Tab, "id" | "openedAt">) => string;
+  addEmptyTab: (sessionId: string) => string;
   removeTab: (sessionId: string, tabId: string) => void;
   setActiveTab: (sessionId: string, tabId: string) => void;
 
@@ -228,17 +229,29 @@ export const useAppStore = create<WorkflowState & Actions>()(
           set({ status: "ready" });
         }
 
-        // Add a tab for this file and activate it.
-        const tabId = get().addTab(sessionId, {
-          kind: "file",
-          refId: uploaded.id,
-          fileName: uploaded.name,
-        });
+        // Fill an existing empty tab if the user prepared one; otherwise add a new tab.
+        const emptyTabId = (get().tabsBySession[sessionId] ?? []).find(
+          (t) => t.kind === "file" && t.refId === "",
+        )?.id;
+        if (emptyTabId) {
+          set((s) => ({
+            tabsBySession: {
+              ...s.tabsBySession,
+              [sessionId]: (s.tabsBySession[sessionId] ?? []).map((t) =>
+                t.id === emptyTabId ? { ...t, refId: uploaded.id, fileName: uploaded.name } : t,
+              ),
+            },
+            activePreview: { kind: "file", fileId: uploaded.id },
+          }));
+        } else {
+          get().addTab(sessionId, {
+            kind: "file",
+            refId: uploaded.id,
+            fileName: uploaded.name,
+          });
+        }
 
-        // Persist the file id so chat can attach it (no extra backend call needed;
-        // file_ids are sent on the next chat message).
-        void sessionId;
-        void tabId;
+        // file_ids are sent on the next chat message.
       },
 
       removeFile: (fileId: string) => {
@@ -373,6 +386,20 @@ export const useAppStore = create<WorkflowState & Actions>()(
             tabsBySession: { ...s.tabsBySession, [sessionId]: next },
             activeTabBySession: { ...s.activeTabBySession, [sessionId]: id },
             activePreview: tabToPreview(tab),
+          };
+        });
+        return id;
+      },
+
+      addEmptyTab: (sessionId) => {
+        const id = newTabId();
+        const tab: Tab = { id, kind: "file", refId: "", fileName: "新文件", openedAt: Date.now() };
+        set((s) => {
+          const existing = s.tabsBySession[sessionId] ?? [];
+          return {
+            tabsBySession: { ...s.tabsBySession, [sessionId]: [...existing, tab] },
+            activeTabBySession: { ...s.activeTabBySession, [sessionId]: id },
+            activePreview: null,
           };
         });
         return id;

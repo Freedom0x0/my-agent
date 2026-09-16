@@ -374,6 +374,25 @@ button { font: inherit; cursor: pointer; }
 }
 .empty-title { font-size: 14px; color: var(--color-text); font-weight: 500; margin: 0; }
 .empty-sub { font-size: 12px; color: var(--color-muted); margin: 0; }
+.empty-action-btn {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 120ms;
+}
+.empty-action-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
 .previewer-download-fab {
   position: absolute;
   right: 16px;
