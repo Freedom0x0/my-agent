@@ -15,6 +15,8 @@ import {
   RobotOutlined,
   StopOutlined,
   UserOutlined,
+  VerticalLeftOutlined,
+  VerticalRightOutlined,
 } from "@ant-design/icons";
 
 import { Previewer } from "./components/Previewer";
@@ -95,6 +97,7 @@ export function App() {
   const clearError = useAppStore((s) => s.clearError);
   const error = useAppStore((s) => s.error);
   const setPanelWidth = useAppStore((s) => s.setPanelWidth);
+  const togglePanel = useAppStore((s) => s.togglePanel);
 
   const isProcessing = status === "processing";
   const hasFiles = files.length > 0;
@@ -134,6 +137,15 @@ export function App() {
     <XProvider theme={theme}>
       <div className="app-shell">
         <header className="app-header">
+          <button
+            type="button"
+            className="header-collapse-btn"
+            onClick={() => togglePanel("sider")}
+            aria-label={panel.siderCollapsed ? "展开会话列表" : "收起会话列表"}
+            data-testid="collapse-sider"
+          >
+            {panel.siderCollapsed ? <VerticalRightOutlined /> : <VerticalLeftOutlined />}
+          </button>
           <div className="brand">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" style={{ flexShrink: 0 }}>
               <rect x="3" y="3" width="18" height="18" rx="4" fill="#2b4a8b" />
@@ -144,6 +156,15 @@ export function App() {
               <span className="app-subtitle">AI 数据分析 · 表格处理 · 归因洞察</span>
             </div>
           </div>
+          <button
+            type="button"
+            className="header-collapse-btn"
+            onClick={() => togglePanel("preview")}
+            aria-label={panel.previewCollapsed ? "展开预览面板" : "收起预览面板"}
+            data-testid="collapse-preview"
+          >
+            {panel.previewCollapsed ? <VerticalLeftOutlined /> : <VerticalRightOutlined />}
+          </button>
         </header>
 
         <main className="workspace">

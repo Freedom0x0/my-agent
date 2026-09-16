@@ -41,37 +41,39 @@ button { font: inherit; cursor: pointer; }
   height: 100vh;
 }
 
-/* Header */
+/* Header collapse controls */
 .app-header {
   height: var(--header-height);
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 12px;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
   z-index: 10;
 }
-.brand { display: flex; align-items: center; gap: 10px; }
+.brand { display: flex; align-items: center; gap: 10px; justify-content: center; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
 .app-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--color-text); }
 .app-subtitle { font-size: 11px; color: var(--color-muted); }
-
-/* Panel collapse button (per-panel) */
-.panel-collapse-btn {
-  width: 28px; height: 28px;
+.header-collapse-btn {
+  width: 32px; height: 32px;
   display: grid; place-items: center;
-  border: 1px solid var(--color-border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--color-surface);
+  background: transparent;
   color: var(--color-muted);
+  font-size: 14px;
+  transition: all 120ms;
 }
-.panel-collapse-btn:hover {
+.header-collapse-btn:hover {
   color: var(--color-accent);
   background: var(--color-accent-soft);
+  border-color: var(--color-border);
 }
-.tab-bar-collapse {
-  flex-shrink: 0;
-  margin-right: 4px;
+.header-collapse-btn.is-active {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 /* Workspace */

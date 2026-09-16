@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Attachments, FileCard } from "@ant-design/x";
 import type { AttachmentsProps } from "@ant-design/x";
 import {
-  CaretRightOutlined,
   CloseOutlined,
   DownloadOutlined,
   FileExcelOutlined,
@@ -36,7 +35,6 @@ export function Previewer() {
   const removeTab = useAppStore((s) => s.removeTab);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const uploadFile = useAppStore((s) => s.uploadFile);
-  const togglePanel = useAppStore((s) => s.togglePanel);
 
   const tabs = currentSessionId ? tabsBySession[currentSessionId] ?? [] : [];
   const activeTabId = currentSessionId ? activeTabBySession[currentSessionId] ?? "" : "";
@@ -76,15 +74,6 @@ export function Previewer() {
   return (
     <div className="previewer">
       <div className="tab-bar" data-testid="tab-bar">
-        <button
-          type="button"
-          className="panel-collapse-btn tab-bar-collapse"
-          onClick={() => togglePanel("preview")}
-          aria-label="收起预览面板"
-          data-testid="collapse-preview"
-        >
-          <CaretRightOutlined />
-        </button>
         {tabs.length === 0 ? (
           <span className="tab-bar-placeholder">暂无打开的文件</span>
         ) : (
