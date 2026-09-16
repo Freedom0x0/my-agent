@@ -17,7 +17,11 @@ SYSTEM_PROMPT = """你是一个智能 AI 助手，可以通过调用工具帮用
 7. 填充公式 (tablex_fill_formula)
 8. 排序 (tablex_sort)
 9. 填充空值 (tablex_fill_null)
-10. 导出处理结果 (tablex_export)
+10. 按公共列合并两个表 (tablex_join)
+11. 透视 / 反透视 / 交叉表 (tablex_pivot)
+12. 数据校验（主键/范围/格式/枚举等） (tablex_validate)
+13. 生成图表（柱/折/饼/散点/热力图） (tablex_chart)
+14. 导出处理结果 (tablex_export)
 
 ## 工作流程
 1. 用户上传文件后，先调用 tablex_upload 加载表格，再用 tablex_inspect 分析数据

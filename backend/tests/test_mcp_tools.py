@@ -63,17 +63,21 @@ def session(sample_workbook: Path) -> Session:
 
 def test_all_tools_have_handlers() -> None:
     assert set(HANDLERS.keys()) == {
-        "tablex_upload",
-        "tablex_inspect",
-        "tablex_normalize",
+        "tablex_chart",
+        "tablex_compare",
         "tablex_deduplicate",
+        "tablex_export",
+        "tablex_fill_formula",
+        "tablex_fill_null",
         "tablex_filter",
         "tablex_group_summary",
-        "tablex_compare",
-        "tablex_fill_formula",
+        "tablex_inspect",
+        "tablex_join",
+        "tablex_normalize",
+        "tablex_pivot",
         "tablex_sort",
-        "tablex_fill_null",
-        "tablex_export",
+        "tablex_upload",
+        "tablex_validate",
     }
 
 

@@ -41,6 +41,9 @@ _FILE_SHEET_TOOLS = {
     "tablex_fill_formula",
     "tablex_sort",
     "tablex_fill_null",
+    "tablex_pivot",
+    "tablex_validate",
+    "tablex_chart",
 }
 
 # Tools that take file_id only.
@@ -103,6 +106,21 @@ def validate_tool_input(name: str, input_dict: dict, session: Any) -> Validation
             right_ref = input_dict["right_ref"]
             if col not in session.tables[right_ref].columns:
                 return ValidationResult(ok=False, error=f"列 {col} 不在 {right_ref}")
+
+    if name == "tablex_join":
+        for side in ("left", "right"):
+            ref = input_dict.get(side)
+            if not isinstance(ref, dict):
+                return ValidationResult(ok=False, error=f"{side} 必须是 {{file_id, sheet}}")
+            file_id = ref.get("file_id")
+            sheet = ref.get("sheet")
+            if not file_id or not sheet:
+                return ValidationResult(ok=False, error=f"{side} 缺少 file_id 或 sheet")
+            if not session.has_file(file_id):
+                return ValidationResult(ok=False, error=f"文件不存在: {file_id}")
+            sheet_ref = f"{file_id}::{sheet}"
+            if sheet_ref not in session.tables:
+                return ValidationResult(ok=False, error=f"工作表未加载: {sheet_ref}")
 
     return ValidationResult(ok=True)
 

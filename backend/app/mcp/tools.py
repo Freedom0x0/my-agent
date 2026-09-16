@@ -244,4 +244,150 @@ TABLEX_TOOL_DEFINITIONS: list[dict] = [
             "required": [],
         },
     },
+    {
+        "name": "tablex_join",
+        "description": "按公共列合并两个工作表（可跨文件 / 跨 sheet）。支持 inner/left/right/full 四种连接方式；on 或 left_on+right_on 二选一；重名加后缀。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "left": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string"},
+                        "sheet": {"type": "string"},
+                    },
+                    "required": ["file_id", "sheet"],
+                },
+                "right": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string"},
+                        "sheet": {"type": "string"},
+                    },
+                    "required": ["file_id", "sheet"],
+                },
+                "on": {"type": "string", "description": "公共列名（左右表同名时用）"},
+                "left_on": {"type": "string"},
+                "right_on": {"type": "string"},
+                "how": {
+                    "type": "string",
+                    "enum": ["inner", "left", "right", "full"],
+                    "default": "inner",
+                },
+                "suffix": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": ["_l", "_r"],
+                    "description": "重名列后缀，长度 2",
+                },
+            },
+            "required": ["left", "right"],
+        },
+    },
+    {
+        "name": "tablex_pivot",
+        "description": "对工作表做透视 / 反透视 / 交叉表。operation=pivot 时需 index+columns+values，operation=unpivot 时需 index，operation=crosstab 时需 index+columns。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "operation": {
+                    "type": "string",
+                    "enum": ["pivot", "unpivot", "crosstab"],
+                },
+                "index": {"type": "array", "items": {"type": "string"}},
+                "columns": {"type": "array", "items": {"type": "string"}},
+                "values": {"type": "array", "items": {"type": "string"}},
+                "aggfunc": {
+                    "type": "string",
+                    "enum": ["sum", "mean", "count", "min", "max"],
+                    "default": "sum",
+                },
+                "fill_value": {"type": "number", "default": 0},
+                "var_name": {"type": "string", "default": "variable"},
+                "value_name": {"type": "string", "default": "value"},
+            },
+            "required": ["file_id", "sheet", "operation"],
+        },
+    },
+    {
+        "name": "tablex_validate",
+        "description": "按规则校验工作表。rule.type 支持 primary_key / foreign_key / range / format / enum / not_null。fail_strategy 决定 report_only(返回报告) / mark(原 sheet 加 _validation_<col>_<type> 列) / filter(只保留通过行)。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "column": {"type": "string"},
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "primary_key", "foreign_key", "range",
+                                    "format", "enum", "not_null",
+                                ],
+                            },
+                            "min": {"type": "number"},
+                            "max": {"type": "number"},
+                            "pattern": {"type": "string"},
+                            "values": {"type": "array"},
+                            "ref": {
+                                "type": "object",
+                                "description": "foreign_key 引用；本工具已简化为 values 字段直接提供候选集合",
+                            },
+                        },
+                        "required": ["column", "type"],
+                    },
+                    "minItems": 1,
+                },
+                "fail_strategy": {
+                    "type": "string",
+                    "enum": ["mark", "filter", "report_only"],
+                    "default": "report_only",
+                },
+            },
+            "required": ["file_id", "sheet", "rules"],
+        },
+    },
+    {
+        "name": "tablex_chart",
+        "description": "根据工作表数据生成图表。chart_type=auto 时根据 x 列类型和 y 数量自动选择（饼/折/柱）。结果图 PNG 嵌入到新输出 xlsx 的 '图表' sheet。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "chart_type": {
+                    "type": "string",
+                    "enum": ["auto", "bar", "line", "pie", "scatter", "heatmap"],
+                    "default": "auto",
+                },
+                "x": {"type": "string"},
+                "y": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                },
+                "title": {"type": "string"},
+                "style": {
+                    "type": "object",
+                    "properties": {
+                        "theme": {
+                            "type": "string",
+                            "enum": ["light", "dark"],
+                            "default": "light",
+                        },
+                        "width": {"type": "integer", "default": 800},
+                        "height": {"type": "integer", "default": 500},
+                    },
+                },
+            },
+            "required": ["file_id", "sheet", "x", "y"],
+        },
+    },
 ]
