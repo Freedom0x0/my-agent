@@ -5,6 +5,14 @@ import { App } from "../App";
 import { api } from "../api/httpClient";
 import { useAppStore } from "../hooks/useAppStore";
 
+// Hoisted so tests below can reference them.
+const hoisted = vi.hoisted(() => ({
+  sseMock: {
+    chatStream: vi.fn(),
+    readSseStream: vi.fn(),
+  },
+}));
+
 vi.mock("../api/httpClient", async () => {
   const actual = await vi.importActual<typeof import("../api/httpClient")>(
     "../api/httpClient",
@@ -19,6 +27,8 @@ vi.mock("../api/httpClient", async () => {
       downloadUrl: vi.fn((id: string) => `/api/outputs/${id}`),
       download: vi.fn().mockRejectedValue(new Error("not mocked")),
     },
+    chatStream: hoisted.sseMock.chatStream,
+    readSseStream: hoisted.sseMock.readSseStream,
   };
 });
 
@@ -37,6 +47,12 @@ beforeEach(() => {
     window.localStorage.clear();
   }
   mockedApi.listSessions.mockResolvedValue([]);
+  hoisted.sseMock.chatStream.mockReset();
+  hoisted.sseMock.readSseStream.mockReset();
+  // Default: chatStream returns a dummy reader; readSseStream invokes onEvent
+  // with nothing. Tests that need SSE behavior override these directly.
+  hoisted.sseMock.chatStream.mockResolvedValue({} as ReadableStreamDefaultReader<Uint8Array>);
+  hoisted.sseMock.readSseStream.mockResolvedValue(undefined);
   useAppStore.setState({
     sessions: [],
     sessionsLoading: false,
@@ -53,6 +69,9 @@ beforeEach(() => {
     tabsBySession: {},
     activeTabBySession: {},
     streamingContent: "",
+    streamingMessageId: null,
+    streamController: null,
+    lastChatToolCalls: [],
     lastChatSheets: [],
     lastChatOutputId: null,
     error: null,
@@ -83,18 +102,6 @@ const sampleUploadResponse = () => ({
   },
 });
 
-const sampleChatResponse = () => ({
-  reply: "处理完成，文件 = 清洗后数据",
-  tool_calls: [
-    { tool: "tablex_normalize", status: "ok", summary: "统一金额格式" },
-    { tool: "tablex_export", status: "ok", summary: "导出结果", output_id: "out-1" },
-  ],
-  output_id: "out-1",
-  sheets: ["清洗后数据"],
-  session_id: "sess-1",
-  error_code: null,
-});
-
 describe("App three-pane workflow", () => {
   it("renders the three-pane shell on mount", () => {
     const { container } = render(<App />);
@@ -120,7 +127,22 @@ describe("App three-pane workflow", () => {
 
   it("sends a chat via the store and shows assistant message", async () => {
     mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
-    mockedApi.chat.mockResolvedValueOnce(sampleChatResponse());
+
+    // Provide an SSE stream that yields a single "done" event with a reply.
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({
+          type: "done",
+          reply: "处理完成，文件 = 清洗后数据",
+          tool_calls: [
+            { tool: "tablex_normalize", status: "ok", summary: "统一金额格式" },
+            { tool: "tablex_export", status: "ok", summary: "导出结果", output_id: "out-1" },
+          ],
+          output_id: "out-1",
+          sheets: ["清洗后数据"],
+        });
+      },
+    );
 
     render(<App />);
 
@@ -135,7 +157,7 @@ describe("App three-pane workflow", () => {
 
     await useAppStore.getState().sendMessage("检查并清洗");
 
-    await waitFor(() => expect(mockedApi.chat).toHaveBeenCalled());
+    await waitFor(() => expect(hoisted.sseMock.chatStream).toHaveBeenCalled());
 
     // The assistant reply text should be somewhere in the chat section
     await waitFor(() => {
@@ -196,5 +218,116 @@ describe("App three-pane workflow", () => {
 
   it("exposes abortStream on the store", () => {
     expect(typeof useAppStore.getState().abortStream).toBe("function");
+  });
+});
+
+describe("SSE streaming flow", () => {
+  async function setupWithFile(): Promise<void> {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+    await useAppStore.getState().uploadFile(
+      new File(["x"], "sample.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    );
+    await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+  }
+
+  it("accumulates text deltas into streamingContent", async () => {
+    await setupWithFile();
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "text", delta: "你好" });
+        onEvent({ type: "text", delta: "，" });
+        onEvent({ type: "text", delta: "世界" });
+        onEvent({
+          type: "done",
+          reply: "你好，世界",
+          tool_calls: [],
+          output_id: null,
+          sheets: [],
+        });
+      },
+    );
+
+    await useAppStore.getState().sendMessage("hi");
+
+    await waitFor(() =>
+      expect(useAppStore.getState().streamingContent).toBe(""),
+    );
+    expect(useAppStore.getState().status).toBe("completed");
+    const last = useAppStore.getState().messages.at(-1);
+    expect(last?.role).toBe("assistant");
+    expect(last?.content).toBe("你好，世界");
+  });
+
+  it("records tool_start and tool_end events into lastChatToolCalls", async () => {
+    await setupWithFile();
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "tool_start", name: "tablex_normalize", id: "tu-1" });
+        onEvent({
+          type: "tool_end",
+          name: "tablex_normalize",
+          summary: "统一金额格式",
+          status: "ok",
+          output_id: null,
+        });
+        onEvent({ type: "text", delta: "done" });
+        onEvent({
+          type: "done",
+          reply: "done",
+          tool_calls: [],
+          output_id: null,
+          sheets: [],
+        });
+      },
+    );
+
+    await useAppStore.getState().sendMessage("检查");
+
+    await waitFor(() =>
+      expect(useAppStore.getState().status).toBe("completed"),
+    );
+    const calls = useAppStore.getState().lastChatToolCalls;
+    expect(calls.some((c) => c.tool === "tablex_normalize" && c.summary === "统一金额格式")).toBe(true);
+  });
+
+  it("abortStream triggers AbortController and clears streaming state", async () => {
+    await setupWithFile();
+    let capturedSignal: AbortSignal | undefined;
+    hoisted.sseMock.chatStream.mockImplementationOnce(
+      async (_payload, signal) => {
+        capturedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }) as unknown as ReadableStreamDefaultReader<Uint8Array>;
+      },
+    );
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "text", delta: "partial " });
+        await new Promise<void>((resolve) => {
+          if (capturedSignal?.aborted) return resolve();
+          capturedSignal?.addEventListener("abort", () => resolve());
+        });
+      },
+    );
+
+    const sendPromise = useAppStore.getState().sendMessage("hi");
+    await waitFor(() =>
+      expect(useAppStore.getState().streamController).not.toBeNull(),
+    );
+
+    useAppStore.getState().abortStream();
+    await sendPromise;
+
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(useAppStore.getState().status).toBe("idle");
+    expect(useAppStore.getState().streamingContent).toBe("");
+    expect(useAppStore.getState().streamController).toBeNull();
   });
 });

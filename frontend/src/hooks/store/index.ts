@@ -18,7 +18,7 @@ export const useAppStore = create<WorkflowState & Actions>()(
       ...chatActions(set, get),
       ...panelActions(set, get),
       ...tabActions(set, get),
-      ...streamActions(set),
+      ...streamActions(set, get),
       ...fileActions(set, get),
     }),
     {

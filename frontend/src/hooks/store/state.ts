@@ -8,6 +8,7 @@ import type {
   WorkbookPreview,
   AppStatus,
 } from "../../domain/workflow";
+import type { ToolCallResult } from "../../domain/models";
 import {
   DEFAULT_SIDER_WIDTH,
   DEFAULT_PREVIEW_WIDTH,
@@ -37,6 +38,9 @@ export type WorkflowState = {
   tabsBySession: Record<string, Tab[]>;
   activeTabBySession: Record<string, string>;
   streamingContent: string;
+  streamingMessageId: string | null;
+  streamController: AbortController | null;
+  lastChatToolCalls: ToolCallResult[];
   lastChatSheets: string[];
   lastChatOutputId: string | null;
   error: UserFacingError | null;
@@ -64,6 +68,9 @@ export const initial: WorkflowState = {
   tabsBySession: {},
   activeTabBySession: {},
   streamingContent: "",
+  streamingMessageId: null,
+  streamController: null,
+  lastChatToolCalls: [],
   lastChatSheets: [],
   lastChatOutputId: null,
   error: null,

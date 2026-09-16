@@ -98,6 +98,8 @@ export function App() {
   const error = useAppStore((s) => s.error);
   const setPanelWidth = useAppStore((s) => s.setPanelWidth);
   const togglePanel = useAppStore((s) => s.togglePanel);
+  const streamingContent = useAppStore((s) => s.streamingContent);
+  const streamingMessageId = useAppStore((s) => s.streamingMessageId);
 
   const isProcessing = status === "processing";
   const hasFiles = files.length > 0;
@@ -111,6 +113,13 @@ export function App() {
     role: m.role === "user" ? "user" : "assistant",
     content: m.role !== "user" ? renderAssistantText(m) : m.content,
   }));
+  if (streamingMessageId && streamingContent) {
+    bubbleItems.push({
+      key: streamingMessageId,
+      role: "assistant",
+      content: streamingContent,
+    });
+  }
 
   const submit = (text: string) => {
     const trimmed = text.trim();
