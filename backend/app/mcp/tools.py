@@ -390,4 +390,160 @@ TABLEX_TOOL_DEFINITIONS: list[dict] = [
             "required": ["file_id", "sheet", "x", "y"],
         },
     },
+    {
+        "name": "tablex_read_chunk",
+        "description": "分块读取工作表行（用于大文件 / 内存敏感场景）。offset 起始行，limit 读取行数；columns 可选，只读指定列。返回 chunk 数据 + total_rows。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "offset": {"type": "integer", "default": 0, "minimum": 0},
+                "limit": {"type": "integer", "default": 1000, "minimum": 1},
+                "columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选：只读这些列",
+                },
+            },
+            "required": ["file_id", "sheet"],
+        },
+    },
+    {
+        "name": "tablex_decrypt",
+        "description": "用密码解密加密的 .xlsx 文件。解密后写入 outputs/<output_id>.xlsx，并把所有工作表重新加载到会话中。密码错误时返回 decrypt_failed 错误码。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string", "description": "加密文件的 file_id"},
+                "password": {"type": "string", "description": "解密密码"},
+            },
+            "required": ["file_id", "password"],
+        },
+    },
+    {
+        "name": "tablex_analyze",
+        "description": "高级分析。operation=correlation 计算相关性矩阵（pearson/spearman）；operation=outlier 异常检测（z-score 或 IQR）；operation=regression 最小二乘线性回归；operation=moving_avg 移动平均（rolling window）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "operation": {
+                    "type": "string",
+                    "enum": ["correlation", "outlier", "regression", "moving_avg"],
+                },
+                "params": {
+                    "type": "object",
+                    "description": "操作相关参数",
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "description": "correlation: pearson/spearman；outlier: zscore/iqr",
+                        },
+                        "columns": {"type": "array", "items": {"type": "string"}},
+                        "x": {"type": "string", "description": "regression 自变量"},
+                        "y": {"type": "string", "description": "regression 因变量"},
+                        "column": {"type": "string", "description": "moving_avg 目标列"},
+                        "window": {"type": "integer", "default": 7, "description": "moving_avg 窗口"},
+                        "threshold": {
+                            "type": "number",
+                            "default": 3.0,
+                            "description": "outlier 阈值（z-score 或 IQR 倍数）",
+                        },
+                    },
+                },
+            },
+            "required": ["file_id", "sheet", "operation"],
+        },
+    },
+    {
+        "name": "tablex_formula_graph",
+        "description": "提取工作表中所有公式并构建依赖图（简单 A1 引用形式）。返回 formulas + 依赖图 + 循环依赖报告。cell 可选，指定时只返回该 cell 的上游 / 下游。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "cell": {
+                    "type": "string",
+                    "description": "可选：只看某个 cell 的依赖（如 A1）",
+                },
+            },
+            "required": ["file_id", "sheet"],
+        },
+    },
+    {
+        "name": "tablex_template_fill",
+        "description": "把 {{key}} 占位符替换为 data[key] 的值，生成新的 xlsx。返回替换次数 + 缺失 key 列表。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "template_file_id": {"type": "string", "description": "模板文件 ID"},
+                "data": {
+                    "type": "object",
+                    "description": "要填的数据，如 {\"name\": \"张三\", \"date\": \"2026-09-16\"}",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": "可选：模板里的工作表名；省略则取第一个",
+                },
+            },
+            "required": ["template_file_id", "data"],
+        },
+    },
+    {
+        "name": "tablex_export_styled",
+        "description": "带格式导出：粗体 / 颜色表头 + 高亮规则 + 冻结首行 + 列宽自适应 + 合并单元格。结果写入 outputs/<output_id>.xlsx。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "style": {
+                    "type": "object",
+                    "properties": {
+                        "header": {
+                            "type": "object",
+                            "properties": {
+                                "bold": {"type": "boolean", "default": False},
+                                "bg_color": {"type": "string", "description": "无 # 前缀的 hex"},
+                                "font_color": {"type": "string", "description": "无 # 前缀的 hex"},
+                            },
+                        },
+                        "highlight_rules": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "column": {"type": "string"},
+                                    "condition": {
+                                        "type": "string",
+                                        "description": "如 >1000, ==\"VIP\", <500",
+                                    },
+                                    "bg_color": {"type": "string"},
+                                },
+                                "required": ["column", "condition", "bg_color"],
+                            },
+                        },
+                        "freeze_header": {"type": "boolean", "default": False},
+                        "auto_column_width": {"type": "boolean", "default": False},
+                        "merge_cells": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "range": {"type": "string", "description": "如 A1:E1"},
+                                    "value": {"type": "string"},
+                                },
+                                "required": ["range", "value"],
+                            },
+                        },
+                    },
+                },
+                "output_filename": {"type": "string"},
+            },
+            "required": ["file_id", "sheet", "style"],
+        },
+    },
 ]
