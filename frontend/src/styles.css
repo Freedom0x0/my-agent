@@ -324,6 +324,28 @@ button { font: inherit; cursor: pointer; }
 }
 .tab-item-close:hover { background: rgba(0, 0, 0, 0.06); color: #c0392b; }
 
+.tab-add-btn {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 12px;
+  transition: all 120ms;
+}
+.tab-add-btn:hover:not(:disabled) {
+  border-style: solid;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.tab-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Previewer body */
 .previewer-body {
   flex: 1;

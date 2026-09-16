@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Attachments, FileCard } from "@ant-design/x";
 import type { AttachmentsProps } from "@ant-design/x";
 import {
@@ -6,6 +6,7 @@ import {
   DownloadOutlined,
   FileExcelOutlined,
   FileTextOutlined,
+  PlusOutlined,
 } from "@ant-design/icons";
 
 import { ACCEPTED_EXTENSIONS } from "../domain/models";
@@ -41,6 +42,7 @@ export function Previewer() {
 
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   const uploaderDisabled = status === "uploading" || status === "processing";
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeTab: Tab | null = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? null,
@@ -112,6 +114,29 @@ export function Previewer() {
             );
           })
         )}
+        <button
+          type="button"
+          className="tab-add-btn"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploaderDisabled}
+          aria-label="添加新文件"
+          title="添加新文件（Excel/CSV）"
+          data-testid="tab-add-btn"
+        >
+          <PlusOutlined />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPT}
+          hidden
+          data-testid="tab-add-input"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void uploadFile(file);
+            e.target.value = "";
+          }}
+        />
       </div>
 
       <div className="previewer-body">
