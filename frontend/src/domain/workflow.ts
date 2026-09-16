@@ -1,78 +1,96 @@
 import type {
-  ExecutionView,
+  AppStatus,
+  ChatMessage,
   FileItem,
-  PlanView,
   UserFacingError,
-  WorkflowStatus,
+  WorkbookPreview,
 } from "./models";
 
+// Re-export types so consumers can import everything from one place.
+export type { AppStatus, ChatMessage, FileItem, UserFacingError, WorkbookPreview };
+
+export type SessionSummary = {
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+  lastUserMsg: string;
+};
+
+export type PreviewTarget =
+  | { kind: "file"; fileId: string }
+  | { kind: "output"; outputId: string };
+
+export type PanelState = {
+  siderWidth: number;
+  previewWidth: number;
+  siderCollapsed: boolean;
+  previewCollapsed: boolean;
+};
+
+export type TabKind = "file" | "output";
+
+export type Tab = {
+  id: string;
+  kind: TabKind;
+  refId: string;
+  fileName: string;
+  openedAt: number;
+};
+
 export type WorkflowState = {
-  status: WorkflowStatus;
+  // Sidebar
+  sessions: SessionSummary[];
+  sessionsLoading: boolean;
+
+  // Current session
+  currentSessionId: string | null;
+  status: AppStatus;
   files: FileItem[];
-  selectedFileIds: string[];
-  requestText: string;
-  plan: PlanView | null;
-  result: ExecutionView | null;
+  messages: ChatMessage[];
+  outputIds: string[];
+
+  // Panels
+  panel: PanelState;
+
+  // Previewer
+  activePreview: PreviewTarget | null;
+  filePreviews: Record<string, WorkbookPreview>;
+  outputPreviews: Record<string, WorkbookPreview>;
+  previewLoading: boolean;
+  previewError: string | null;
+
+  // Per-session tab isolation (persisted)
+  tabsBySession: Record<string, Tab[]>;
+  activeTabBySession: Record<string, string>;
+
+  // Streaming
+  streamingContent: string;
+
+  // Output of the last chat (for chat-bubble chip linking)
+  lastChatSheets: string[];
+  lastChatOutputId: string | null;
+
   error: UserFacingError | null;
 };
 
-export const initialState: WorkflowState = {
-  status: "idle",
-  files: [],
-  selectedFileIds: [],
-  requestText: "",
-  plan: null,
-  result: null,
-  error: null,
-};
+export const DEFAULT_SIDER_WIDTH = 280;
+export const DEFAULT_PREVIEW_WIDTH = 380;
+export const SIDER_MIN = 240;
+export const SIDER_MAX = 480;
+export const PREVIEW_MIN = 280;
+export const PREVIEW_MAX = 720;
 
-export type WorkflowAction =
-  | { type: "UPLOAD_START" }
-  | { type: "UPLOAD_SUCCESS"; file: FileItem }
-  | { type: "UPLOAD_FAIL"; error: UserFacingError }
-  | { type: "PLAN_START" }
-  | { type: "PLAN_SUCCESS"; plan: PlanView }
-  | { type: "PLAN_FAIL"; error: UserFacingError }
-  | { type: "EXECUTE_START" }
-  | { type: "EXECUTE_SUCCESS"; result: ExecutionView }
-  | { type: "EXECUTE_FAIL"; error: UserFacingError }
-  | { type: "SET_REQUEST"; request: string }
-  | { type: "CLEAR_ERROR" }
-  | { type: "RESET" };
-
-export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): WorkflowState {
-  switch (action.type) {
-    case "UPLOAD_START":
-      return { ...state, status: "uploading", error: null };
-    case "UPLOAD_SUCCESS":
-      return {
-        ...state,
-        status: "inspected",
-        files: [...state.files, action.file],
-        selectedFileIds: [...state.selectedFileIds, action.file.id],
-        error: null,
-      };
-    case "UPLOAD_FAIL":
-      return { ...state, status: "error", error: action.error };
-    case "PLAN_START":
-      return { ...state, status: "planning", error: null };
-    case "PLAN_SUCCESS":
-      return { ...state, status: "plan_ready", plan: action.plan };
-    case "PLAN_FAIL":
-      return { ...state, status: "error", error: action.error };
-    case "EXECUTE_START":
-      return { ...state, status: "executing", error: null };
-    case "EXECUTE_SUCCESS":
-      return { ...state, status: "completed", result: action.result };
-    case "EXECUTE_FAIL":
-      return { ...state, status: "error", error: action.error };
-    case "SET_REQUEST":
-      return { ...state, requestText: action.request };
-    case "CLEAR_ERROR":
-      return { ...state, error: null };
-    case "RESET":
-      return initialState;
-    default:
-      return state;
+export function newSessionId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
   }
+  return Math.random().toString(36).slice(2);
+}
+
+export function newTabId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

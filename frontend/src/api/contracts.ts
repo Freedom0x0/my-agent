@@ -6,6 +6,33 @@ export const errorResponseSchema = z.object({
   details: z.record(z.unknown()).optional(),
 });
 
+// --- Sessions ---
+
+export const sessionSummarySchema = z.object({
+  session_id: z.string(),
+  title: z.string(),
+  updated_at: z.string(),
+  message_count: z.number(),
+  last_user_msg: z.string(),
+});
+
+export const sessionListResponseSchema = z.object({
+  sessions: z.array(sessionSummarySchema),
+});
+
+export const sessionDetailSchema = z.object({
+  session_id: z.string(),
+  title: z.string(),
+  updated_at: z.string(),
+  message_count: z.number(),
+  last_user_msg: z.string(),
+  messages: z.array(z.unknown()),
+  output_ids: z.array(z.string()),
+});
+
+export type SessionSummary = z.infer<typeof sessionSummarySchema>;
+export type SessionDetail = z.infer<typeof sessionDetailSchema>;
+
 export const issueSchema = z.object({
   code: z.string(),
   severity: z.enum(["info", "warning", "error"]),
@@ -46,70 +73,34 @@ export const fileUploadResponseSchema = z.object({
   inspection: workbookInspectionDtoSchema,
 });
 
-export const operationSchema = z.object({
-  kind: z.string(),
+// --- Chat (POST /api/chat) ---
+
+export const toolCallResultDtoSchema = z.object({
+  tool: z.string(),
+  status: z.enum(["ok", "error"]),
+  summary: z.string(),
+  output_id: z.string().nullable().optional(),
 });
 
-export const operationPlanDtoSchema = z.object({
-  id: z.string(),
-  source_sheets: z.array(z.string()),
-  operations: z.array(operationSchema),
-  outputs: z.array(z.string()),
-  explanation: z.string(),
-  clarification_question: z.string().nullable().optional(),
-  requires_confirmation: z.boolean(),
+export const chatRequestSchema = z.object({
+  message: z.string().min(1).max(4000),
+  file_ids: z.array(z.string()),
+  session_id: z.string().optional(),
 });
 
-export const planResponseSchema = z.object({
-  plan: operationPlanDtoSchema,
-});
-
-export const conclusionDtoSchema = z.object({
-  text: z.string(),
-  value: z.union([z.string(), z.number(), z.null()]),
-  severity: z.enum(["info", "warning", "error"]),
-  source: z.object({
-    step_id: z.string(),
-    sheet: z.string(),
-    columns: z.array(z.string()),
-    condition: z.string().nullable().optional(),
-    formula: z.string().nullable().optional(),
-    rows: z.array(z.number()),
-  }),
-});
-
-export const auditEventDtoSchema = z.object({
-  step_id: z.string(),
-  operation: z.string(),
-  input_sheets: z.array(z.string()),
-  output_sheets: z.array(z.string()),
-  columns: z.array(z.string()),
-  input_rows: z.number(),
-  output_rows: z.number(),
-  affected_rows: z.array(z.number()),
-  details: z.record(z.unknown()),
-});
-
-export const executionResponseSchema = z.object({
-  output_id: z.string(),
-  sheets: z.array(z.string()),
-  metrics: z.record(z.union([z.string(), z.number()])),
-  conclusions: z.array(conclusionDtoSchema),
-  audit_events: z.array(auditEventDtoSchema),
-});
-
-export const auditResponseSchema = z.object({
-  output_id: z.string(),
-  events: z.array(auditEventDtoSchema),
-  conclusions: z.array(conclusionDtoSchema),
+export const chatResponseSchema = z.object({
+  reply: z.string(),
+  tool_calls: z.array(toolCallResultDtoSchema),
+  output_id: z.string().nullable().optional(),
+  sheets: z.array(z.string()).optional(),
+  session_id: z.string().optional(),
+  error_code: z.string().nullable().optional(),
 });
 
 export type FileUploadResponse = z.infer<typeof fileUploadResponseSchema>;
-export type OperationPlanDto = z.infer<typeof operationPlanDtoSchema>;
-export type PlanResponse = z.infer<typeof planResponseSchema>;
-export type ExecutionResponse = z.infer<typeof executionResponseSchema>;
-export type AuditResponse = z.infer<typeof auditResponseSchema>;
+export type ToolCallResultDto = z.infer<typeof toolCallResultDtoSchema>;
+export type ChatRequest = z.infer<typeof chatRequestSchema>;
+export type ChatResponse = z.infer<typeof chatResponseSchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
 export type WorkbookInspectionDto = z.infer<typeof workbookInspectionDtoSchema>;
 export type SheetInspectionDto = z.infer<typeof sheetInspectionDtoSchema>;
-export type ConclusionDto = z.infer<typeof conclusionDtoSchema>;

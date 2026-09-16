@@ -1,16 +1,16 @@
 import { z } from "zod";
 
 import {
-  auditResponseSchema,
+  chatRequestSchema,
+  chatResponseSchema,
   errorResponseSchema,
-  executionResponseSchema,
   fileUploadResponseSchema,
-  planResponseSchema,
-  type AuditResponse,
+  sessionDetailSchema,
+  sessionListResponseSchema,
+  type ChatRequest,
+  type ChatResponse,
   type ErrorResponse,
-  type ExecutionResponse,
   type FileUploadResponse,
-  type PlanResponse,
 } from "./contracts";
 
 const API_BASE: string =
@@ -88,7 +88,7 @@ async function request<T>(
 ): Promise<T> {
   const requestId = newRequestId();
   const controller = new AbortController();
-  const timeoutMs = options.timeoutMs ?? (init.method === "GET" ? 30_000 : 120_000);
+  const timeoutMs = options.timeoutMs ?? (init.method === "GET" ? 30_000 : 180_000);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const signal = options.signal ?? controller.signal;
 
@@ -171,30 +171,54 @@ export const api = {
       fileUploadResponseSchema,
       options,
     ),
-  createPlan: (fileIds: string[], requestText: string, options?: RequestOptions) =>
-    httpClient.postJson<PlanResponse>(
-      "/plans",
-      { file_ids: fileIds, request: requestText },
-      planResponseSchema,
-      options,
-    ),
-  executePlan: (
-    fileIds: string[],
-    plan: unknown,
-    confirmationToken: string | null,
-    options?: RequestOptions,
-  ) =>
-    httpClient.postJson<ExecutionResponse>(
-      "/executions",
-      { file_ids: fileIds, plan, confirmation_token: confirmationToken },
-      executionResponseSchema,
-      options,
-    ),
-  getAudit: (outputId: string, options?: RequestOptions) =>
-    httpClient.getJson<AuditResponse>(
-      `/outputs/${outputId}/audit`,
-      auditResponseSchema,
-      options,
-    ),
+  chat: (payload: ChatRequest, options?: RequestOptions) => {
+    // Validate on the wire boundary — keeps hooks free of duplication.
+    const body = chatRequestSchema.parse(payload);
+    return httpClient.postJson<ChatResponse>("/chat", body, chatResponseSchema, options);
+  },
+  listSessions: (options?: RequestOptions) =>
+    httpClient.getJson("/sessions", sessionListResponseSchema, options).then((r) => r.sessions),
+  getSession: (sessionId: string, options?: RequestOptions) =>
+    httpClient.getJson(`/sessions/${encodeURIComponent(sessionId)}`, sessionDetailSchema, options),
   downloadUrl: (outputId: string) => `${API_BASE}/outputs/${outputId}`,
+  download: async (outputId: string, options?: RequestOptions): Promise<ArrayBuffer> => {
+    const requestId = newRequestId();
+    const controller = new AbortController();
+    const timeoutMs = options?.timeoutMs ?? 60_000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${API_BASE}/outputs/${outputId}`, {
+        method: "GET",
+        signal: options?.signal ?? controller.signal,
+        headers: { "X-Request-ID": requestId, Accept: "*/*" },
+      });
+      if (!response.ok) {
+        throw new ApiError({
+          status: response.status,
+          errorCode: "http_error",
+          message: `下载失败 ${response.status}`,
+          requestId,
+        });
+      }
+      return await response.arrayBuffer();
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      if ((err as { name?: string }).name === "AbortError") {
+        throw new ApiError({
+          status: 0,
+          errorCode: "request_timeout",
+          message: "下载超时",
+          requestId,
+        });
+      }
+      throw new ApiError({
+        status: 0,
+        errorCode: "network_error",
+        message: "下载失败",
+        requestId,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  },
 };
