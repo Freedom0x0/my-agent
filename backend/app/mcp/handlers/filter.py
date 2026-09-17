@@ -14,9 +14,14 @@ def handle_filter(tool_call: ToolCall, session: Any) -> ToolResult:
     sheet = tool_call.input["sheet"]
     conditions_raw = tool_call.input["conditions"]
     match = tool_call.input.get("match", "all")
-    output_sheet = tool_call.input.get("output_sheet", "筛选结果")
+    output_sheet = tool_call.input.get("output_sheet")
+    if not output_sheet:
+        return _fail("output_sheet 是必填参数，请指定唯一名字")
     sheet_ref = f"{file_id}::{sheet}"
     df = session.tables[sheet_ref]
+
+    if output_sheet in session.tables:
+        return _fail(f"output_sheet '{output_sheet}' 已存在，请换名（多次调用 filter 必须用不同名字）")
 
     conditions = []
     for c in conditions_raw:

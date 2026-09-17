@@ -55,6 +55,7 @@ export type ToolCallResult = {
   status: "ok" | "error";
   summary: string;
   outputId?: string | null;
+  outputName?: string | null;
 };
 
 export type ChatMessage = {
@@ -63,6 +64,7 @@ export type ChatMessage = {
   content: string;
   toolCalls?: ToolCallResult[];
   outputId?: string | null;
+  outputName?: string | null;
   sheets?: string[];
   timestamp: number;
 };

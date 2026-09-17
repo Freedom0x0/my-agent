@@ -14,6 +14,10 @@ def handle_export(tool_call: ToolCall, session: Any) -> ToolResult:
     if not session.tables:
         return _fail("当前会话没有任何工作表可以导出")
 
+    output_name = tool_call.input.get("output_name")
+    if not output_name:
+        return _fail("output_name 是必填参数")
+
     output_id = uuid.uuid4().hex
     output_path = session.output_dir / f"{output_id}.xlsx"
     _write_export_workbook(output_path, session.tables, session.audit_events)
@@ -34,16 +38,17 @@ def handle_export(tool_call: ToolCall, session: Any) -> ToolResult:
         },
         status="completed",
         created_at=datetime.now(timezone.utc).isoformat(),
+        output_name=output_name,
     )
     insert_output(db_path, record)
 
     sheets = list(session.tables.keys())
     return _ok(
         f"已生成处理结果文件，共 {len(sheets)} 个工作表",
-        data={"output_id": output_id, "sheets": sheets + ["_audit"]},
+        data={"output_name": output_name, "sheets": sheets + ["_audit"]},
     )
 
 
 HANDLERS = {
-    "tablex_export": HandlerSpec("tablex_export", [], handle_export),
+    "tablex_export": HandlerSpec("tablex_export", ["output_name"], handle_export),
 }

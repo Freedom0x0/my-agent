@@ -15,6 +15,9 @@ from ._base import HandlerSpec, _audit, _db_path, _fail, _ok, _write_export_work
 def handle_decrypt(tool_call: ToolCall, session: Any) -> ToolResult:
     file_id = tool_call.input["file_id"]
     password = tool_call.input.get("password", "")
+    output_name = tool_call.input.get("output_name")
+    if not output_name:
+        return _fail("output_name 是必填参数")
 
     if file_id not in session.files:
         return _fail(f"文件不存在: {file_id}")
@@ -51,6 +54,7 @@ def handle_decrypt(tool_call: ToolCall, session: Any) -> ToolResult:
             result={"sheet_names": list(sheets.keys())},
             status="completed",
             created_at=datetime.now(timezone.utc).isoformat(),
+            output_name=output_name,
         ),
     )
 
@@ -64,15 +68,14 @@ def handle_decrypt(tool_call: ToolCall, session: Any) -> ToolResult:
     return _ok(
         f"解密成功，共 {len(sheets)} 个工作表",
         data={
-            "output_id": output_id,
-            "file_id": output_id,
-            "sheet_names": list(sheets.keys()),
+            "output_name": output_name,
+            "sheets": list(sheets.keys()),
         },
     )
 
 
 HANDLERS = {
     "tablex_decrypt": HandlerSpec(
-        "tablex_decrypt", ["file_id", "password"], handle_decrypt,
+        "tablex_decrypt", ["file_id", "password", "output_name"], handle_decrypt,
     ),
 }

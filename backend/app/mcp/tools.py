@@ -232,16 +232,18 @@ TABLEX_TOOL_DEFINITIONS: list[dict] = [
     },
     {
         "name": "tablex_export",
-        "description": "将当前 session 中所有处理后的工作表写入一个新的 xlsx 文件，返回 output_id 供前端下载。",
+        "description": "将当前 session 中所有处理后的工作表写入一个新的 xlsx 文件，返回 output_name 和 sheets 列表供前端预览。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_id": {
+                "output_name": {
                     "type": "string",
-                    "description": "主文件 ID（用于命名审计来源，可省略）",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "结果文件的人类可读名字（必填，会作为右侧预览器 tab 标题）",
                 },
             },
-            "required": [],
+            "required": ["output_name"],
         },
     },
     {
@@ -411,14 +413,20 @@ TABLEX_TOOL_DEFINITIONS: list[dict] = [
     },
     {
         "name": "tablex_decrypt",
-        "description": "用密码解密加密的 .xlsx 文件。解密后写入 outputs/<output_id>.xlsx，并把所有工作表重新加载到会话中。密码错误时返回 decrypt_failed 错误码。",
+        "description": "用密码解密加密的 .xlsx 文件。解密后写入 session 的工作表。密码错误时返回 decrypt_failed 错误码。",
         "input_schema": {
             "type": "object",
             "properties": {
                 "file_id": {"type": "string", "description": "加密文件的 file_id"},
                 "password": {"type": "string", "description": "解密密码"},
+                "output_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "结果文件的人类可读名字（必填，会作为右侧预览器 tab 标题）",
+                },
             },
-            "required": ["file_id", "password"],
+            "required": ["file_id", "password", "output_name"],
         },
     },
     {
@@ -494,7 +502,7 @@ TABLEX_TOOL_DEFINITIONS: list[dict] = [
     },
     {
         "name": "tablex_export_styled",
-        "description": "带格式导出：粗体 / 颜色表头 + 高亮规则 + 冻结首行 + 列宽自适应 + 合并单元格。结果写入 outputs/<output_id>.xlsx。",
+        "description": "带格式导出：粗体 / 颜色表头 + 高亮规则 + 冻结首行 + 列宽自适应 + 合并单元格。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -541,9 +549,36 @@ TABLEX_TOOL_DEFINITIONS: list[dict] = [
                         },
                     },
                 },
-                "output_filename": {"type": "string"},
+                "output_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "结果文件的人类可读名字（必填，会作为右侧预览器 tab 标题）",
+                },
             },
-            "required": ["file_id", "sheet", "style"],
+            "required": ["file_id", "sheet", "style", "output_name"],
+        },
+    },
+    {
+        "name": "tablex_split_by_column",
+        "description": "按指定列的唯一值把工作表拆成多个 sheet（每个唯一值一个 sheet，sheet 名 = 该值的字符串）。返回 output_name 和创建的 sheets 列表。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "sheet": {"type": "string"},
+                "group_column": {
+                    "type": "string",
+                    "description": "按此列的唯一值拆分",
+                },
+                "output_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "结果文件的人类可读名字（必填，会作为右侧预览器 tab 标题）",
+                },
+            },
+            "required": ["file_id", "sheet", "group_column", "output_name"],
         },
     },
 ]

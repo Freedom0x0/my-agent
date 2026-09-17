@@ -29,6 +29,7 @@ export const toolCallResultDtoSchema = z.object({
   status: z.enum(["ok", "error"]),
   summary: z.string(),
   output_id: z.string().nullable().optional(),
+  output_name: z.string().nullable().optional(),
 });
 
 export const messageDtoSchema = z.object({
@@ -61,6 +62,7 @@ export const chatResponseSchema = z.object({
   reply: z.string(),
   tool_calls: z.array(toolCallResultDtoSchema),
   output_id: z.string().nullable().optional(),
+  output_name: z.string().nullable().optional(),
   sheets: z.array(z.string()).optional(),
   session_id: z.string().optional(),
   error_code: z.string().nullable().optional(),

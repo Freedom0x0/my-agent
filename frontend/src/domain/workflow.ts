@@ -35,6 +35,7 @@ export type Tab = {
   kind: TabKind;
   refId: string;
   fileName: string;
+  outputName?: string;
   openedAt: number;
 };
 

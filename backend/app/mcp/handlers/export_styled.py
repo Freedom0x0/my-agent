@@ -17,6 +17,9 @@ def handle_export_styled(tool_call: ToolCall, session: Any) -> ToolResult:
     file_id = tool_call.input["file_id"]
     sheet = tool_call.input["sheet"]
     style = tool_call.input.get("style") or {}
+    output_name = tool_call.input.get("output_name")
+    if not output_name:
+        return _fail("output_name 是必填参数")
     if not isinstance(style, dict):
         return _fail("style 必须是 dict")
 
@@ -65,17 +68,18 @@ def handle_export_styled(tool_call: ToolCall, session: Any) -> ToolResult:
             result={"sheet_name": sheet},
             status="completed",
             created_at=datetime.now(timezone.utc).isoformat(),
+            output_name=output_name,
         ),
     )
 
     return _ok(
         f"样式导出完成：{sheet}",
-        data={"output_id": output_id, "sheet_name": sheet},
+        data={"output_name": output_name, "sheets": [sheet]},
     )
 
 
 HANDLERS = {
     "tablex_export_styled": HandlerSpec(
-        "tablex_export_styled", ["file_id", "sheet", "style"], handle_export_styled,
+        "tablex_export_styled", ["file_id", "sheet", "style", "output_name"], handle_export_styled,
     ),
 }

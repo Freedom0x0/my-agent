@@ -17,8 +17,8 @@ export type StreamEvent =
   | { type: "model_response"; stop_reason: string }
   | { type: "text"; delta: string }
   | { type: "tool_start"; name: string; id: string }
-  | { type: "tool_end"; name: string; summary: string; status: string; output_id?: string | null }
-  | { type: "done"; reply: string; tool_calls: StreamToolCall[]; output_id: string | null; sheets: string[] }
+  | { type: "tool_end"; name: string; summary: string; status: string; output_id?: string | null; output_name?: string | null }
+  | { type: "done"; reply: string; tool_calls: StreamToolCall[]; output_id?: string | null; output_name?: string | null; sheets: string[] }
   | { type: "error"; code: string; message: string };
 
 export type StreamToolCall = {
@@ -26,6 +26,7 @@ export type StreamToolCall = {
   status: "ok" | "error";
   summary: string;
   output_id?: string | null;
+  output_name?: string | null;
 };
 
 export async function chatStream(

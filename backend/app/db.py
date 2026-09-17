@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS outputs (
   plan_json TEXT NOT NULL,
   result_json TEXT NOT NULL,
   status TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  output_name TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
@@ -68,6 +69,7 @@ class OutputRecord:
         result: dict[str, Any],
         status: str,
         created_at: str,
+        output_name: str | None = None,
     ):
         self.output_id = output_id
         self.stored_path = stored_path
@@ -76,6 +78,7 @@ class OutputRecord:
         self.result = result
         self.status = status
         self.created_at = created_at
+        self.output_name = output_name
 
 
 def init_db(db_path: Path) -> None:
@@ -83,6 +86,17 @@ def init_db(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
         conn.commit()
+    _migrate_outputs(db_path)
+
+
+def _migrate_outputs(db_path: Path) -> None:
+    """Idempotent column add for `outputs.output_name` (legacy dbs pre-09-17)."""
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute("PRAGMA table_info(outputs)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "output_name" not in cols:
+            conn.execute("ALTER TABLE outputs ADD COLUMN output_name TEXT")
+            conn.commit()
 
 
 def insert_file(db_path: Path, record: FileRecord) -> None:
@@ -125,7 +139,7 @@ def get_file(db_path: Path, file_id: str) -> FileRecord | None:
 def insert_output(db_path: Path, record: OutputRecord) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO outputs (id, stored_path, source_file_ids_json, plan_json, result_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO outputs (id, stored_path, source_file_ids_json, plan_json, result_json, status, created_at, output_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.output_id,
                 record.stored_path,
@@ -134,6 +148,7 @@ def insert_output(db_path: Path, record: OutputRecord) -> None:
                 json.dumps(record.result, ensure_ascii=False),
                 record.status,
                 record.created_at,
+                record.output_name,
             ),
         )
         conn.commit()
@@ -146,6 +161,7 @@ def get_output(db_path: Path, output_id: str) -> OutputRecord | None:
         row = cur.fetchone()
     if not row:
         return None
+    name = row["output_name"] if "output_name" in row.keys() else None
     return OutputRecord(
         output_id=row["id"],
         stored_path=row["stored_path"],
@@ -154,6 +170,7 @@ def get_output(db_path: Path, output_id: str) -> OutputRecord | None:
         result=json.loads(row["result_json"]),
         status=row["status"],
         created_at=row["created_at"],
+        output_name=name,
     )
 
 

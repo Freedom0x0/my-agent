@@ -14,6 +14,7 @@ export function AssistantBubble({ message, isStreaming = false }: Props) {
   const liveToolCalls = useAppStore((s) => s.lastChatToolCalls);
   const isLive = isStreaming || streamingId === message.id;
   const toolCalls = isLive ? liveToolCalls : message.toolCalls ?? [];
+  const knownFileIds = useAppStore((s) => s.files).map((f) => f.id);
 
   return (
     <div className="assistant-bubble" data-testid={`assistant-bubble-${message.id}`}>
@@ -25,6 +26,8 @@ export function AssistantBubble({ message, isStreaming = false }: Props) {
           content={message.content}
           sheets={message.sheets ?? []}
           outputId={message.outputId ?? null}
+          outputName={message.outputName ?? null}
+          knownFileIds={knownFileIds}
         />
       </div>
       <BubbleActions message={message} />

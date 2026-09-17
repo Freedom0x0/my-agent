@@ -81,6 +81,7 @@ def test_all_tools_have_handlers() -> None:
         "tablex_pivot",
         "tablex_read_chunk",
         "tablex_sort",
+        "tablex_split_by_column",
         "tablex_template_fill",
         "tablex_upload",
         "tablex_validate",
@@ -98,6 +99,32 @@ def test_validate_unknown_tool(session: Session) -> None:
 
 def test_validate_missing_required_field(session: Session) -> None:
     res = validate_tool_input("tablex_normalize", {"file_id": "file-001"}, session)
+    assert not res.ok
+    assert "缺少参数" in (res.error or "")
+
+
+def test_validate_export_requires_output_name(session: Session) -> None:
+    res = validate_tool_input("tablex_export", {}, session)
+    assert not res.ok
+    assert "缺少参数" in (res.error or "")
+
+
+def test_validate_decrypt_requires_output_name(session: Session) -> None:
+    res = validate_tool_input(
+        "tablex_decrypt",
+        {"file_id": "file-001", "password": "p"},
+        session,
+    )
+    assert not res.ok
+    assert "缺少参数" in (res.error or "")
+
+
+def test_validate_export_styled_requires_output_name(session: Session) -> None:
+    res = validate_tool_input(
+        "tablex_export_styled",
+        {"file_id": "file-001", "sheet": "明细", "style": {}},
+        session,
+    )
     assert not res.ok
     assert "缺少参数" in (res.error or "")
 
@@ -236,12 +263,13 @@ def test_handle_filter_creates_output_sheet(session: Session) -> None:
                 "file_id": "file-001",
                 "sheet": "明细",
                 "conditions": [{"column": "部门", "operator": "eq", "value": "研发"}],
+                "output_sheet": "研发数据",
             },
         ),
         session,
     )
     assert res.success
-    assert "筛选结果" in session.tables
+    assert "研发数据" in session.tables
 
 
 def test_handle_filter_invalid_condition(session: Session) -> None:
@@ -511,18 +539,96 @@ def test_handle_fill_null_unknown_method(session: Session) -> None:
 def test_handle_export_writes_file_and_returns_id(session: Session, tmp_path: Path) -> None:
     session.output_dir = tmp_path / "outputs"
     session.output_dir.mkdir(parents=True, exist_ok=True)
-    res = handle_export(ToolCall(tool_use_id="e1", name="tablex_export", input={}), session)
+    res = handle_export(
+        ToolCall(tool_use_id="e1", name="tablex_export", input={"output_name": "result"}),
+        session,
+    )
     assert res.success
     assert res.data is not None
-    out_id = res.data["output_id"]
+    assert res.data["output_name"] == "result"
+    out_id = session.output_id
     assert (tmp_path / "outputs" / f"{out_id}.xlsx").exists()
     assert session.output_id == out_id
 
 
 def test_handle_export_empty_tables(tmp_path: Path) -> None:
     s = Session("s", tmp_path / "out")
-    res = handle_export(ToolCall(tool_use_id="e1", name="tablex_export", input={}), s)
+    res = handle_export(
+        ToolCall(tool_use_id="e1", name="tablex_export", input={"output_name": "empty"}),
+        s,
+    )
     assert not res.success
+
+
+def test_handle_export_requires_output_name(session: Session) -> None:
+    res = handle_export(ToolCall(tool_use_id="e1", name="tablex_export", input={}), session)
+    assert not res.success
+    assert "output_name" in (res.error or "")
+
+
+def test_handle_export_data_has_no_output_id(session: Session, tmp_path: Path) -> None:
+    session.output_dir = tmp_path / "outputs"
+    session.output_dir.mkdir(parents=True, exist_ok=True)
+    res = handle_export(
+        ToolCall(tool_use_id="e1", name="tablex_export", input={"output_name": "result"}),
+        session,
+    )
+    assert res.success
+    assert res.data is not None
+    assert "output_id" not in res.data
+    assert res.data["output_name"] == "result"
+
+
+def test_validate_export_requires_output_name(session: Session) -> None:
+    res = validate_tool_input("tablex_export", {}, session)
+    assert not res.ok
+    assert "缺少参数" in (res.error or "")
+
+
+def test_validate_split_by_column_requires_output_name(session: Session) -> None:
+    res = validate_tool_input(
+        "tablex_split_by_column",
+        {"file_id": "file-001", "sheet": "明细", "group_column": "部门"},
+        session,
+    )
+    assert not res.ok
+    assert "缺少参数" in (res.error or "")
+
+
+def test_handle_filter_missing_output_sheet(session: Session) -> None:
+    res = handle_filter(
+        ToolCall(
+            tool_use_id="f2",
+            name="tablex_filter",
+            input={
+                "file_id": "file-001",
+                "sheet": "明细",
+                "conditions": [{"column": "部门", "operator": "eq", "value": "研发"}],
+            },
+        ),
+        session,
+    )
+    assert not res.success
+    assert "output_sheet" in (res.error or "")
+
+
+def test_handle_filter_rejects_duplicate_output_sheet(session: Session) -> None:
+    session.tables["dup"] = session.tables["file-001::明细"].head(0).copy()
+    res = handle_filter(
+        ToolCall(
+            tool_use_id="f3",
+            name="tablex_filter",
+            input={
+                "file_id": "file-001",
+                "sheet": "明细",
+                "conditions": [{"column": "部门", "operator": "eq", "value": "研发"}],
+                "output_sheet": "dup",
+            },
+        ),
+        session,
+    )
+    assert not res.success
+    assert "已存在" in (res.error or "")
 
 
 # ---------- truncate_result ----------

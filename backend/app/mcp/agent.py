@@ -41,12 +41,14 @@ class ChatResponse:
         reply: str,
         tool_calls: list[dict[str, Any]],
         output_id: str | None = None,
+        output_name: str | None = None,
         sheets: list[str] | None = None,
         error_code: str | None = None,
     ):
         self.reply = reply
         self.tool_calls = tool_calls
         self.output_id = output_id
+        self.output_name = output_name
         self.sheets = sheets or []
         self.error_code = error_code
 
@@ -55,6 +57,7 @@ class ChatResponse:
             "reply": self.reply,
             "tool_calls": self.tool_calls,
             "output_id": self.output_id,
+            "output_name": self.output_name,
             "sheets": self.sheets,
             **({"error_code": self.error_code} if self.error_code else {}),
         }
@@ -274,6 +277,17 @@ def _extract_text(content_blocks: list[dict[str, Any]]) -> str:
     return "".join(parts)
 
 
+def _last_output_name(session: Any) -> str | None:
+    """Walk session.tool_calls_log tail to find the most recent output_name."""
+    for entry in reversed(session.tool_calls_log):
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("output_name")
+        if name:
+            return name
+    return None
+
+
 def _build_first_user_text(user_message: str, session: Session) -> str:
     if not session.files:
         return user_message
@@ -357,6 +371,7 @@ def process_chat(
                     reply=text,
                     tool_calls=list(session.tool_calls_log),
                     output_id=session.output_id,
+                    output_name=_last_output_name(session),
                     sheets=list(session.tables.keys()),
                 )
 
@@ -367,6 +382,7 @@ def process_chat(
                     reply="模型输出过长，请简化需求",
                     tool_calls=list(session.tool_calls_log),
                     output_id=session.output_id,
+                    output_name=_last_output_name(session),
                     sheets=list(session.tables.keys()),
                     error_code="model_truncated",
                 )
@@ -420,6 +436,8 @@ def process_chat(
                     }
                     if result.data and "output_id" in result.data:
                         log_entry["output_id"] = result.data["output_id"]
+                    if result.data and "output_name" in result.data:
+                        log_entry["output_name"] = result.data["output_name"]
                     session.tool_calls_log.append(log_entry)
                 session.messages.append({"role": "user", "content": tool_results})
                 session.touch()
@@ -549,7 +567,7 @@ async def process_chat_stream(
                 "type": "done",
                 "reply": text,
                 "tool_calls": list(session.tool_calls_log),
-                "output_id": session.output_id,
+                "output_name": _last_output_name(session),
                 "sheets": list(session.tables.keys()),
             }
             return
@@ -563,7 +581,7 @@ async def process_chat_stream(
                 "message": "模型输出过长，请简化需求",
                 "reply": "模型输出过长，请简化需求",
                 "tool_calls": list(session.tool_calls_log),
-                "output_id": session.output_id,
+                "output_name": _last_output_name(session),
                 "sheets": list(session.tables.keys()),
             }
             return
@@ -617,6 +635,8 @@ async def process_chat_stream(
                 }
                 if result.data and "output_id" in result.data:
                     log_entry["output_id"] = result.data["output_id"]
+                if result.data and "output_name" in result.data:
+                    log_entry["output_name"] = result.data["output_name"]
                 session.tool_calls_log.append(log_entry)
                 yield {
                     "type": "tool_end",
@@ -624,6 +644,7 @@ async def process_chat_stream(
                     "summary": result.summary,
                     "status": tool_status,
                     "output_id": result.data.get("output_id") if isinstance(result.data, dict) else None,
+                    "output_name": result.data.get("output_name") if isinstance(result.data, dict) else None,
                 }
             session.messages.append({"role": "user", "content": tool_results})
             session.touch()

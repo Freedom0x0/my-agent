@@ -45,6 +45,7 @@ export type WorkflowState = {
   lastChatToolCalls: ToolCallResult[];
   lastChatSheets: string[];
   lastChatOutputId: string | null;
+  lastChatOutputName: string | null;
   error: UserFacingError | null;
   messageReactions: Record<string, ReactionValue>;
   sessionHasMore: Record<string, boolean>;
@@ -79,6 +80,7 @@ export const initial: WorkflowState = {
   lastChatToolCalls: [],
   lastChatSheets: [],
   lastChatOutputId: null,
+  lastChatOutputName: null,
   error: null,
   messageReactions: {},
   sessionHasMore: {},

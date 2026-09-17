@@ -262,6 +262,30 @@ button { font: inherit; cursor: pointer; }
 }
 .sheet-link:hover { background: var(--color-accent); color: #fff; }
 
+/* Output / file chips rendered inside markdown text */
+.sheet-link-chip,
+.file-link-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px; margin: 0 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font: inherit; font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.sheet-link-chip {
+  background: var(--color-accent-soft); color: #1c3766;
+}
+.sheet-link-chip:hover { background: var(--color-accent); color: #fff; }
+.file-link-chip {
+  background: #f3f4f6; color: #2c2f33;
+}
+.file-link-chip:hover:not(:disabled) { background: #d6dae0; }
+.file-link-chip:disabled {
+  background: #f3f4f6; color: #9aa0a6;
+  cursor: not-allowed; opacity: 0.7;
+}
+
 /* Assistant / User bubble wrappers */
 .assistant-bubble,
 .user-bubble {

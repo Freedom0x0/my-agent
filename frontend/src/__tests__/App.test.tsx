@@ -4,6 +4,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../App";
 import { api } from "../api/httpClient";
 import { useAppStore } from "../hooks/useAppStore";
+import type { ChatMessage } from "../domain/workflow";
+import { AssistantBubble } from "../components/bubble/AssistantBubble";
 
 // Hoisted so tests below can reference them.
 const hoisted = vi.hoisted(() => ({
@@ -74,6 +76,7 @@ beforeEach(() => {
     lastChatToolCalls: [],
     lastChatSheets: [],
     lastChatOutputId: null,
+    lastChatOutputName: null,
     error: null,
   });
 });
@@ -579,5 +582,199 @@ describe("S. Lazy load older", () => {
     );
     await waitFor(() => expect(useAppStore.getState().messages.length).toBe(30));
     expect(useAppStore.getState().sessionHasMore[sid]).toBe(false);
+  });
+});
+
+describe("T. Output business-friendly (output_name)", () => {
+  const fileId = "abc1234567890abcdef1234567890abc"; // 32 chars (test stub)
+
+  function seed(opts: {
+    file?: boolean;
+    tabOutput?: { id: string; outputName: string };
+    message: { id?: string; content: string; outputName?: string | null; sheets?: string[] };
+  }) {
+    const sid = "s-chip";
+    useAppStore.setState({
+      currentSessionId: sid,
+      files: opts.file
+        ? [
+            {
+              id: fileId,
+              name: "source.xlsx",
+              sizeBytes: 1024,
+              sheets: [{ ref: `${fileId}::明细`, displayName: "明细", rowCount: 1, columnCount: 1, issues: [], columns: [] }],
+            },
+          ]
+        : [],
+      tabsBySession: {
+        [sid]: [
+          ...(opts.file
+            ? [{ id: "tab-file-1", kind: "file", refId: fileId, fileName: "source.xlsx", openedAt: Date.now() }]
+            : []),
+          ...(opts.tabOutput
+            ? [{ id: opts.tabOutput.id, kind: "output", refId: "oid-1", fileName: opts.tabOutput.outputName, outputName: opts.tabOutput.outputName, openedAt: Date.now() }]
+            : []),
+        ],
+      },
+      activeTabBySession: { [sid]: opts.tabOutput ? opts.tabOutput.id : "tab-file-1" },
+      messages: [
+        {
+          id: opts.message.id ?? "chip-msg",
+          role: "assistant",
+          content: opts.message.content,
+          toolCalls: [],
+          outputName: opts.message.outputName ?? null,
+          sheets: opts.message.sheets ?? [],
+          timestamp: Date.now(),
+        } as ChatMessage,
+      ],
+    } as Partial<typeof useAppStore.getState>);
+  }
+
+  it("MarkdownContent renders outputName as SheetLinkChip", () => {
+    seed({ message: { content: "已生成 按部门拆分", outputName: "按部门拆分" } });
+    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    const chip = screen.getByTestId("sheet-link-chip");
+    expect(chip.textContent).toContain("按部门拆分");
+  });
+
+  it("SheetLinkChip click switches to a matching tab", () => {
+    seed({
+      tabOutput: { id: "tab-out-1", outputName: "按部门拆分" },
+      message: { content: "按部门拆分", outputName: "按部门拆分" },
+    });
+    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    fireEvent.click(screen.getByTestId("sheet-link-chip"));
+    expect(useAppStore.getState().activeTabBySession["s-chip"]).toBe("tab-out-1");
+  });
+
+  it("SheetLinkChip click creates a new tab when none exists", () => {
+    seed({ message: { content: "新结果", outputName: "新结果" } });
+    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    const sid = "s-chip";
+    const before = useAppStore.getState().tabsBySession[sid].length;
+    fireEvent.click(screen.getByTestId("sheet-link-chip"));
+    const tabs = useAppStore.getState().tabsBySession[sid];
+    expect(tabs.length).toBe(before + 1);
+    const created = tabs[tabs.length - 1];
+    expect(created.kind).toBe("output");
+    expect(created.fileName).toBe("新结果");
+    expect(useAppStore.getState().activeTabBySession[sid]).toBe(created.id);
+  });
+
+  it("FileLinkChip is rendered and enabled for uploaded file_id", () => {
+    seed({ file: true, message: { content: `数据源 ${fileId}` } });
+    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    const chip = screen.getByTestId("file-link-chip");
+    expect(chip).not.toBeDisabled();
+    fireEvent.click(chip);
+    expect(useAppStore.getState().activeTabBySession["s-chip"]).toBe("tab-file-1");
+  });
+
+  it("FileLinkChip is not rendered for unknown file_id (avoids false positives)", () => {
+    const orphan = "ffffffffffffffffffffffffffffffff";
+    seed({ message: { id: "orphan-msg", content: `未知文件 ${orphan}` } });
+    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    expect(screen.queryByTestId("file-link-chip")).toBeNull();
+  });
+
+  it("MarkdownContent still renders the legacy #sheet: link when sheets array is present", () => {
+    seed({ message: { content: "结果是 清洗后数据", sheets: ["清洗后数据"] } });
+    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    expect(screen.getByTestId("sheet-link")).toBeInTheDocument();
+  });
+
+  it("MarkdownContent renders SheetLinkChip with antd icon", () => {
+    seed({ message: { content: "按部门拆分", outputName: "按部门拆分" } });
+    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    const chip = screen.getByTestId("sheet-link-chip");
+    expect(chip.querySelector(".anticon")).toBeInTheDocument();
+  });
+
+  it("tool_end event with output_name adds an output tab and stores lastChatOutputName", async () => {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+    await useAppStore.getState().uploadFile(
+      new File(["x"], "sample.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+    );
+    await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "tool_start", name: "tablex_export", id: "tu-1" });
+        onEvent({
+          type: "tool_end",
+          name: "tablex_export",
+          summary: "导出",
+          status: "ok",
+          output_id: "out-xyz",
+          output_name: "清洗后数据",
+        });
+        onEvent({
+          type: "done",
+          reply: "ok",
+          tool_calls: [{ tool: "tablex_export", status: "ok", summary: "导出", output_id: "out-xyz", output_name: "清洗后数据" }],
+          output_id: "out-xyz",
+          output_name: "清洗后数据",
+          sheets: ["清洗后数据"],
+        });
+      },
+    );
+
+    await useAppStore.getState().sendMessage("清洗");
+    await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
+
+    const sid = useAppStore.getState().currentSessionId!;
+    const tabs = useAppStore.getState().tabsBySession[sid];
+    const outputTabs = tabs.filter((t) => t.kind === "output");
+    expect(outputTabs.some((t) => t.fileName === "清洗后数据")).toBe(true);
+    expect(outputTabs.some((t) => t.outputName === "清洗后数据")).toBe(true);
+    expect(useAppStore.getState().lastChatOutputName).toBe("清洗后数据");
+  });
+
+  it("done event records outputName on the assistant message", async () => {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+    await useAppStore.getState().uploadFile(
+      new File(["x"], "sample.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+    );
+    await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "text", delta: "已生成" });
+        onEvent({
+          type: "done",
+          reply: "已生成 部门结果",
+          tool_calls: [],
+          output_id: "out-2",
+          output_name: "部门结果",
+          sheets: ["部门结果"],
+        });
+      },
+    );
+
+    await useAppStore.getState().sendMessage("hi");
+    await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
+
+    const last = useAppStore.getState().messages.at(-1);
+    expect(last?.role).toBe("assistant");
+    expect(last?.outputName).toBe("部门结果");
+  });
+
+  it("Tab type carries outputName field when created with addTab", () => {
+    const sid = "s-addtab";
+    useAppStore.setState({
+      currentSessionId: sid,
+      tabsBySession: { [sid]: [] },
+      activeTabBySession: { [sid]: "" },
+    } as Partial<typeof useAppStore.getState>);
+    const id = useAppStore.getState().addTab(sid, {
+      kind: "output",
+      refId: "rid-1",
+      fileName: "按部门",
+      outputName: "按部门",
+    });
+    const tab = useAppStore.getState().tabsBySession[sid].find((t) => t.id === id);
+    expect(tab?.outputName).toBe("按部门");
+    expect(tab?.fileName).toBe("按部门");
   });
 });

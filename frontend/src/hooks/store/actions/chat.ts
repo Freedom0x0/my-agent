@@ -43,13 +43,23 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
 
       const accumulatedReply: { value: string } = { value: "" };
       const toolCallsBox: { value: StreamToolCall[] } = { value: [] };
-      const doneBox: { value: { reply: string; tool_calls: StreamToolCall[]; output_id: string | null; sheets: string[] } | null } = { value: null };
+      const doneBox: {
+        value: {
+          reply: string;
+          tool_calls: StreamToolCall[];
+          output_id: string | null;
+          output_name: string | null;
+          sheets: string[];
+        } | null;
+      } = { value: null };
       const errorBox: { value: { code: string; message: string } | null } = { value: null };
+      const lastOutputName: { value: string | null } = { value: null };
 
       const finish = (status: "completed" | "error", error?: { code: string; message: string }) => {
         if (status === "completed" && doneBox.value) {
           const doneEvent = doneBox.value;
           const assistantId = newMessageId();
+          const finalOutputName = doneEvent.output_name ?? lastOutputName.value;
           const assistantMsg: ChatMessage = {
             id: assistantId,
             role: "assistant",
@@ -59,8 +69,10 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
               status: t.status,
               summary: t.summary,
               outputId: t.output_id ?? null,
+              outputName: t.output_name ?? null,
             })),
             outputId: doneEvent.output_id ?? null,
+            outputName: finalOutputName,
             sheets: doneEvent.sheets ?? [],
             timestamp: Date.now(),
           };
@@ -77,24 +89,27 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
               : cur.outputIds,
             lastChatSheets: sheets,
             lastChatOutputId: outputId,
+            lastChatOutputName: finalOutputName,
             lastChatToolCalls: toolCallsBox.value.map((t) => ({
               tool: t.tool,
               status: t.status,
               summary: t.summary,
               outputId: t.output_id ?? null,
+              outputName: t.output_name ?? null,
             })),
           }));
 
-          if (outputId) {
+          if (outputId && finalOutputName) {
             get().addTab(sessionId, {
               kind: "output",
               refId: outputId,
-              fileName: `${outputId}.xlsx`,
+              fileName: finalOutputName,
+              outputName: finalOutputName,
             });
             (async () => {
               try {
                 const buffer = await api.download(outputId);
-                const preview = parseWorkbook(buffer, `${outputId}.xlsx`);
+                const preview = parseWorkbook(buffer, `${finalOutputName}.xlsx`);
                 set((cur) => ({
                   outputPreviews: { ...cur.outputPreviews, [outputId]: preview },
                 }));
@@ -140,13 +155,38 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
                 last.status = evt.status as "ok" | "error";
                 last.summary = evt.summary;
                 last.output_id = evt.output_id ?? null;
+                last.output_name = evt.output_name ?? null;
               } else {
                 list.push({
                   tool: evt.name,
                   status: evt.status as "ok" | "error",
                   summary: evt.summary,
                   output_id: evt.output_id ?? null,
+                  output_name: evt.output_name ?? null,
                 });
+              }
+              if (evt.output_name) {
+                lastOutputName.value = evt.output_name;
+                const outputId = evt.output_id ?? "";
+                get().addTab(sessionId, {
+                  kind: "output",
+                  fileName: evt.output_name,
+                  outputName: evt.output_name,
+                  refId: outputId,
+                });
+                if (outputId) {
+                  (async () => {
+                    try {
+                      const buffer = await api.download(outputId);
+                      const preview = parseWorkbook(buffer, `${evt.output_name}.xlsx`);
+                      set((cur) => ({
+                        outputPreviews: { ...cur.outputPreviews, [outputId]: preview },
+                      }));
+                    } catch {
+                      /* ignore — UI shows error state if download fails */
+                    }
+                  })();
+                }
               }
               break;
             }
@@ -154,7 +194,8 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
               doneBox.value = {
                 reply: evt.reply,
                 tool_calls: evt.tool_calls,
-                output_id: evt.output_id,
+                output_id: evt.output_id ?? null,
+                output_name: evt.output_name ?? null,
                 sheets: evt.sheets,
               };
               break;

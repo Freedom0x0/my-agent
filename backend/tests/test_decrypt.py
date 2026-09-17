@@ -99,12 +99,25 @@ def test_handle_decrypt_missing_password(session: Session, tmp_path: Path) -> No
     res = handle_decrypt(
         ToolCall(
             tool_use_id="d1", name="tablex_decrypt",
-            input={"file_id": "file-D", "password": ""},
+            input={"file_id": "file-D", "password": "", "output_name": "解密结果"},
         ),
         session,
     )
     assert not res.success
     assert "password" in (res.error or "")
+
+
+def test_handle_decrypt_requires_output_name(session: Session, tmp_path: Path) -> None:
+    session.files["file-D"] = {"path": str(tmp_path / "x.xlsx"), "sha256": "x", "original_name": "x.xlsx"}
+    res = handle_decrypt(
+        ToolCall(
+            tool_use_id="d1", name="tablex_decrypt",
+            input={"file_id": "file-D", "password": "x"},
+        ),
+        session,
+    )
+    assert not res.success
+    assert "output_name" in (res.error or "")
 
 
 def test_handle_decrypt_wrong_password(session: Session, tmp_path: Path) -> None:
@@ -119,7 +132,7 @@ def test_handle_decrypt_wrong_password(session: Session, tmp_path: Path) -> None
     res = handle_decrypt(
         ToolCall(
             tool_use_id="d1", name="tablex_decrypt",
-            input={"file_id": "file-D", "password": "wrong"},
+            input={"file_id": "file-D", "password": "wrong", "output_name": "解密后"},
         ),
         session,
     )

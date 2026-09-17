@@ -156,6 +156,69 @@ def test_chat_stream_tool_then_end_turn(
     assert tool_end["status"] in {"ok", "error"}
     done = next(e for e in events if e["type"] == "done")
     assert done["reply"] == "你好"
+    # output_id MUST NOT leak through done payload; only output_name + sheets.
+    assert "output_id" not in done
+
+
+def test_chat_stream_done_event_uses_output_name(
+    app_with_data_dir, client: TestClient, sample_file: Path,
+) -> None:
+    _, tmp_path = app_with_data_dir
+    file_id = "file-002"
+    insert_file(
+        tmp_path / "runtime" / "metadata.db",
+        FileRecord(
+            file_id=file_id,
+            original_name="sample.xlsx",
+            stored_path=str(sample_file),
+            file_type="xlsx",
+            size_bytes=sample_file.stat().st_size,
+            sha256="x",
+            inspection={"filename": "sample.xlsx", "file_type": "xlsx", "sheets": []},
+            created_at=_dt.datetime.utcnow().isoformat(),
+        ),
+    )
+
+    async def stream_with_export() -> AsyncIterator[dict[str, Any]]:
+        # First call: tool_use for export (no output_name → error → done)
+        yield {"type": "model_meta", "message_id": "m"}
+        yield {"type": "tool_use_start", "id": "tu-1", "name": "tablex_export"}
+        yield {"type": "tool_use_delta", "id": "tu-1", "partial_json": "{}"}
+        yield {"type": "tool_use_end", "id": "tu-1"}
+        yield {
+            "type": "message_done", "stop_reason": "tool_use",
+            "content_blocks": [
+                {"type": "tool_use", "id": "tu-1", "name": "tablex_export", "input": {}},
+            ],
+        }
+
+    async def stream_end() -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "model_meta", "message_id": "m"}
+        yield {"type": "text", "delta": "ok"}
+        yield {"type": "message_done", "stop_reason": "end_turn",
+               "content_blocks": [{"type": "text", "text": "ok"}]}
+
+    responses = [stream_with_export(), stream_end()]
+
+    async def caller(**_kwargs):
+        gen = responses.pop(0)
+        async for e in gen:
+            yield e
+
+    agent_module.set_stream_caller(caller)
+    try:
+        with client.stream("POST", "/api/chat/stream",
+                           json={"message": "go", "file_ids": [file_id], "session_id": "sse-name"}) as r:
+            body = "".join(r.iter_text())
+    finally:
+        agent_module.set_stream_caller(None)
+
+    events = _parse_sse(body)
+    done = next(e for e in events if e["type"] == "done")
+    # output_id is gone; output_name is None because the only tool call errored out.
+    assert "output_id" not in done
+    assert "output_name" in done
+    assert "sheets" in done
 
 
 def test_chat_stream_disconnect_stops_early(client: TestClient) -> None:

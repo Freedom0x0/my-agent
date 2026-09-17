@@ -94,13 +94,16 @@ def test_handle_export_styled_basic(session: Session) -> None:
                     "freeze_header": True,
                     "auto_column_width": True,
                 },
+                "output_name": "样式结果",
             },
         ),
         session,
     )
     assert res.success
-    assert res.data["output_id"]
-    out_path = session.output_dir / f"{res.data['output_id']}.xlsx"
+    assert res.data["output_name"] == "样式结果"
+    assert res.data.get("sheets") == ["data"]
+    assert "output_id" not in res.data
+    out_path = session.output_dir / f"{session.output_id}.xlsx"
     assert out_path.exists()
     # Reopen and confirm styles survived. The writer escapes "::" to "_of_".
     wb2 = load_workbook(out_path)
@@ -110,11 +113,23 @@ def test_handle_export_styled_basic(session: Session) -> None:
     assert styled.cell(row=1, column=1).font.bold is True
 
 
+def test_handle_export_styled_requires_output_name(session: Session) -> None:
+    res = handle_export_styled(
+        ToolCall(
+            tool_use_id="s1", name="tablex_export_styled",
+            input={"file_id": "file-S", "sheet": "data", "style": {}},
+        ),
+        session,
+    )
+    assert not res.success
+    assert "output_name" in (res.error or "")
+
+
 def test_handle_export_styled_invalid_style_type(session: Session) -> None:
     res = handle_export_styled(
         ToolCall(
             tool_use_id="s1", name="tablex_export_styled",
-            input={"file_id": "file-S", "sheet": "data", "style": "bad"},
+            input={"file_id": "file-S", "sheet": "data", "style": "bad", "output_name": "x"},
         ),
         session,
     )
@@ -125,7 +140,7 @@ def test_handle_export_styled_unknown_sheet(session: Session) -> None:
     res = handle_export_styled(
         ToolCall(
             tool_use_id="s1", name="tablex_export_styled",
-            input={"file_id": "file-S", "sheet": "nope", "style": {}},
+            input={"file_id": "file-S", "sheet": "nope", "style": {}, "output_name": "x"},
         ),
         session,
     )

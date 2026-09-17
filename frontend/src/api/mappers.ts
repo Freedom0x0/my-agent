@@ -79,6 +79,7 @@ function mapToolCall(dto: ToolCallResultDto): ToolCallResult {
     status: dto.status,
     summary: dto.summary,
     outputId: dto.output_id ?? null,
+    outputName: dto.output_name ?? null,
   };
 }
 
@@ -92,6 +93,7 @@ export function mapChatResponseToAssistantMessage(
     content: resp.reply,
     toolCalls: resp.tool_calls.map(mapToolCall),
     outputId: resp.output_id ?? null,
+    outputName: resp.output_name ?? null,
     sheets: resp.sheets ?? [],
     timestamp: Date.now(),
   };
@@ -116,18 +118,19 @@ export function mapSessionMessages(
       (acc, t) => t.output_id ?? acc,
       null,
     );
+    const outName = (m.tool_calls ?? []).reduce<string | null>(
+      (acc, t) => t.output_name ?? acc,
+      null,
+    );
     const position = (baseIndex ?? 0) + idx;
     const id = sessionId ? `${sessionId}-${position}` : `loaded-${position}`;
-    // Backend schema doesn't persist per-message `sheets`; they live on the
-    // session-level `output_ids` map. Lazy-loaded messages therefore won't get
-    // SheetLink buttons — acceptable for v1, add a `sheets` field to messageDtoSchema
-    // to upgrade.
     return {
       id,
       role: m.role,
       content: extractText(m.content),
       toolCalls: m.tool_calls?.map(mapToolCall),
       outputId: outId,
+      outputName: outName,
       sheets: [],
       timestamp: Date.now(),
     };
