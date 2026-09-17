@@ -464,6 +464,53 @@ button { font: inherit; cursor: pointer; }
 .tool-timeline-tool { font-weight: 600; }
 .tool-timeline-summary { color: var(--color-muted); }
 
+/* Flat timeline — ToolCallItem */
+.tool-call-item {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  margin: 4px 0;
+  overflow: hidden;
+}
+.tool-call-item.is-error { border-color: #ffa39e; }
+.tool-call-item.is-ok { border-color: #b7eb8f; }
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  font-size: 13px;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background 120ms;
+}
+.tool-call-header:hover { background: var(--color-surface-hover); }
+.tool-call-icon { font-size: 14px; line-height: 1; }
+.tool-call-name { font-weight: 600; flex: 1; }
+.tool-call-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-muted);
+}
+.tool-call-item.is-ok .tool-call-status { background: #f6ffed; color: #389e0d; }
+.tool-call-item.is-error .tool-call-status { background: #fff1f0; color: #cf1322; }
+.tool-call-caret { font-size: 12px; color: var(--color-muted); }
+.tool-call-body {
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tool-call-summary { font-size: 12px; color: var(--color-muted); }
+
 /* Previewer tab bar */
 .previewer {
   display: flex;

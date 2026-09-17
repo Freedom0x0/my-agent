@@ -443,15 +443,15 @@ describe("Q. Markdown rendering", () => {
   });
 });
 
-describe("R. Tool progress", () => {
-  it("renders ToolProgressBar when assistant message has tool calls", () => {
-    const id = "r-1";
+describe("Flat message timeline (R replacement)", () => {
+  it("renders 1 text + N ToolCallItems interleaved for an assistant message with tool calls", () => {
+    const id = "flat-1";
     useAppStore.setState({
       messages: [
         {
           id,
           role: "assistant",
-          content: "完成",
+          content: "已完成",
           toolCalls: [
             { tool: "tablex_normalize", status: "ok", summary: "统一金额格式" },
             { tool: "tablex_export", status: "ok", summary: "导出结果", outputId: "out-1" },
@@ -463,19 +463,30 @@ describe("R. Tool progress", () => {
       ],
     });
     render(<App />);
-    expect(screen.getByTestId(`tool-progress-${id}`)).toBeInTheDocument();
-    expect(screen.getByTestId(`tool-progress-toggle-${id}`).textContent).toContain("已完成 2 个工具调用");
+    expect(screen.getByTestId(`assistant-bubble-${id}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`tool-call-toggle-tablex_normalize`)).toBeInTheDocument();
+    expect(screen.getByTestId(`tool-call-toggle-tablex_export`)).toBeInTheDocument();
+    // default collapsed: body not present
+    expect(screen.queryByTestId(`tool-call-body-tablex_normalize`)).toBeNull();
+    // open the first one
+    fireEvent.click(screen.getByTestId(`tool-call-toggle-tablex_normalize`));
+    expect(screen.getByTestId(`tool-call-body-tablex_normalize`)).toBeInTheDocument();
+    expect(screen.getByTestId(`tool-call-body-tablex_normalize`).textContent).toContain("统一金额格式");
   });
 
-  it("hides ToolProgressBar when no tool calls", () => {
-    const id = "r-2";
+  it("preserves order across 3 tool calls (interleaved after text bubble)", () => {
+    const id = "flat-2";
     useAppStore.setState({
       messages: [
         {
           id,
           role: "assistant",
-          content: "纯文本回复",
-          toolCalls: [],
+          content: "开始",
+          toolCalls: [
+            { tool: "t_alpha", status: "ok", summary: "1" },
+            { tool: "t_beta", status: "ok", summary: "2" },
+            { tool: "t_gamma", status: "ok", summary: "3" },
+          ],
           outputId: null,
           sheets: [],
           timestamp: Date.now(),
@@ -483,18 +494,81 @@ describe("R. Tool progress", () => {
       ],
     });
     render(<App />);
-    expect(screen.queryByTestId(`tool-progress-${id}`)).toBeNull();
+    const chat = document.querySelector(".workspace-chat")!;
+    const idxAlpha = chat.textContent!.indexOf("t_alpha");
+    const idxBeta = chat.textContent!.indexOf("t_beta");
+    const idxGamma = chat.textContent!.indexOf("t_gamma");
+    expect(idxAlpha).toBeGreaterThanOrEqual(0);
+    expect(idxBeta).toBeGreaterThan(idxAlpha);
+    expect(idxGamma).toBeGreaterThan(idxBeta);
   });
 
-  it("toggles the tool timeline on click", () => {
-    const id = "r-3";
+  it("renders no text bubble when assistant has toolCalls but empty content", () => {
+    const id = "flat-3";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "",
+          toolCalls: [{ tool: "t_only", status: "ok", summary: "no text" }],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    expect(screen.queryByTestId(`assistant-bubble-${id}`)).toBeNull();
+    expect(screen.getByTestId(`tool-call-toggle-t_only`)).toBeInTheDocument();
+  });
+
+  it("user message still renders as a single bubble (no interleaving)", () => {
+    const uid = "u-1";
+    useAppStore.setState({
+      messages: [
+        { id: uid, role: "user", content: "hi", timestamp: Date.now() },
+      ],
+    });
+    render(<App />);
+    expect(screen.getByTestId(`user-bubble-${uid}`)).toBeInTheDocument();
+    expect(screen.queryByText(/tool-call/i)).toBeNull();
+  });
+
+  it("ToolCallItem collapses again after second click", () => {
+    const id = "flat-4";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "x",
+          toolCalls: [{ tool: "t_toggle", status: "ok", summary: "s" }],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    const btn = screen.getByTestId(`tool-call-toggle-t_toggle`);
+    fireEvent.click(btn);
+    expect(screen.getByTestId(`tool-call-body-t_toggle`)).toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(screen.queryByTestId(`tool-call-body-t_toggle`)).toBeNull();
+  });
+
+  it("renders SheetLinkChip in ToolCallItem body when outputName present", () => {
+    const id = "flat-5";
     useAppStore.setState({
       messages: [
         {
           id,
           role: "assistant",
           content: "完成",
-          toolCalls: [{ tool: "tablex_inspect", status: "ok", summary: "扫描空值" }],
+          toolCalls: [
+            { tool: "t_export", status: "ok", summary: "导出", outputId: "out-1", outputName: "结果表" },
+          ],
           outputId: null,
           sheets: [],
           timestamp: Date.now(),
@@ -502,10 +576,49 @@ describe("R. Tool progress", () => {
       ],
     });
     render(<App />);
-    expect(screen.queryByTestId(`tool-timeline-${id}`)).toBeNull();
-    fireEvent.click(screen.getByTestId(`tool-progress-toggle-${id}`));
-    expect(screen.getByTestId(`tool-timeline-${id}`)).toBeInTheDocument();
-    expect(screen.getByTestId(`tool-timeline-${id}`).textContent).toContain("tablex_inspect");
+    fireEvent.click(screen.getByTestId(`tool-call-toggle-t_export`));
+    expect(screen.getByTestId("sheet-link-chip")).toBeInTheDocument();
+  });
+
+  it("streams new tool_end events as additional ToolCallItems in the timeline", async () => {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+
+    render(<App />);
+
+    await useAppStore.getState().uploadFile(
+      new File(["x"], "sample.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    );
+    await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "tool_start", name: "tablex_normalize", id: "tu-1" });
+        onEvent({
+          type: "tool_end",
+          name: "tablex_normalize",
+          summary: "统一金额",
+          status: "ok",
+          output_id: null,
+        });
+        onEvent({ type: "text", delta: "ok" });
+        onEvent({
+          type: "done",
+          reply: "ok",
+          tool_calls: [{ tool: "tablex_normalize", status: "ok", summary: "统一金额" }],
+          output_id: null,
+          sheets: [],
+        });
+      },
+    );
+
+    await useAppStore.getState().sendMessage("hi");
+    await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
+
+    const last = useAppStore.getState().messages.at(-1);
+    expect(last?.toolCalls?.[0]?.tool).toBe("tablex_normalize");
+    expect(await screen.findByTestId(`tool-call-toggle-tablex_normalize`)).toBeInTheDocument();
   });
 });
 

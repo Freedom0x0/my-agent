@@ -25,6 +25,7 @@ import { SessionSidebar } from "./components/SessionSidebar";
 import { SenderPopover } from "./components/SenderPopover";
 import { AssistantBubble } from "./components/bubble/AssistantBubble";
 import { UserBubble } from "./components/bubble/UserBubble";
+import { ToolCallItem } from "./components/bubble/ToolCallItem";
 import { useAppStore, bootstrapApp } from "./hooks/useAppStore";
 
 const theme = {
@@ -72,6 +73,7 @@ export function App() {
   const togglePanel = useAppStore((s) => s.togglePanel);
   const streamingContent = useAppStore((s) => s.streamingContent);
   const streamingMessageId = useAppStore((s) => s.streamingMessageId);
+  const lastChatToolCalls = useAppStore((s) => s.lastChatToolCalls);
 
   const isProcessing = status === "processing";
   const hasFiles = files.length > 0;
@@ -80,14 +82,35 @@ export function App() {
 
   useEffect(() => { void bootstrapApp(); }, []);
 
-  const bubbleItems: BubbleItemType[] = messages.map((m) => ({
-    key: m.id,
-    role: m.role === "user" ? "user" : "assistant",
-    content: m.role !== "user" ? <AssistantBubble message={m} /> : <UserBubble message={m} />,
-  }));
+  const bubbleItems: BubbleItemType[] = [];
+  messages.forEach((m) => {
+    if (m.role === "user") {
+      bubbleItems.push({
+        key: m.id,
+        role: "user",
+        content: <UserBubble message={m} />,
+      });
+      return;
+    }
+    // assistant
+    if (m.content) {
+      bubbleItems.push({
+        key: `${m.id}::text`,
+        role: "assistant",
+        content: <AssistantBubble message={m} />,
+      });
+    }
+    (m.toolCalls ?? []).forEach((tc, i) => {
+      bubbleItems.push({
+        key: `${m.id}::tc::${i}::${tc.tool}`,
+        role: "assistant",
+        content: <ToolCallItem toolCall={tc} />,
+      });
+    });
+  });
   if (streamingMessageId && streamingContent) {
     bubbleItems.push({
-      key: streamingMessageId,
+      key: `${streamingMessageId}::text`,
       role: "assistant",
       content: (
         <AssistantBubble
@@ -100,6 +123,15 @@ export function App() {
           }}
         />
       ),
+    });
+  }
+  if (streamingMessageId && lastChatToolCalls.length > 0) {
+    lastChatToolCalls.forEach((tc, i) => {
+      bubbleItems.push({
+        key: `${streamingMessageId}::tc::${i}::${tc.tool}`,
+        role: "assistant",
+        content: <ToolCallItem toolCall={tc} />,
+      });
     });
   }
 

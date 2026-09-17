@@ -5,9 +5,13 @@ type Props = {
   outputName: string;
 };
 
+const EMPTY_TABS: never[] = [];
+
 export function SheetLinkChip({ outputName }: Props) {
   const sessionId = useAppStore((s) => s.currentSessionId);
-  const tabs = useAppStore((s) => (sessionId ? s.tabsBySession[sessionId] ?? [] : []));
+  const tabs = useAppStore((s) =>
+    sessionId ? s.tabsBySession[sessionId] ?? EMPTY_TABS : EMPTY_TABS,
+  );
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const addTab = useAppStore((s) => s.addTab);
 
