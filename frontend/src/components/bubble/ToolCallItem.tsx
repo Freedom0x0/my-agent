@@ -12,7 +12,7 @@ type Props = {
 export function ToolCallItem({ toolCall, defaultOpen = false }: Props) {
   const [open, setOpen] = useState(defaultOpen);
   const status = toolCall.status ?? "running";
-  const icon = status === "ok" ? "✅" : status === "error" ? "❌" : "🔧";
+  const statusLabel = status === "ok" ? "成功" : status === "error" ? "失败" : "运行中";
   const chipName = toolCall.outputName ?? toolCall.outputId ?? null;
 
   return (
@@ -27,9 +27,8 @@ export function ToolCallItem({ toolCall, defaultOpen = false }: Props) {
         data-testid={`tool-call-toggle-${toolCall.tool}`}
         aria-expanded={open}
       >
-        <span className="tool-call-icon">{icon}</span>
         <span className="tool-call-name">{toolCall.tool}</span>
-        <span className="tool-call-status">{status}</span>
+        <span className="tool-call-status">{statusLabel}</span>
         <CaretDownOutlined rotate={open ? 180 : 0} className="tool-call-caret" />
       </button>
       {open && (

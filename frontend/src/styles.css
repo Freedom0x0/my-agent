@@ -464,52 +464,44 @@ button { font: inherit; cursor: pointer; }
 .tool-timeline-tool { font-weight: 600; }
 .tool-timeline-summary { color: var(--color-muted); }
 
-/* Flat timeline — ToolCallItem */
+/* Flat timeline — ToolCallItem (minimal: subtle indent + light bg, no card border) */
 .tool-call-item {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  margin: 4px 0;
-  overflow: hidden;
-}
-.tool-call-item.is-error { border-color: #ffa39e; }
-.tool-call-item.is-ok { border-color: #b7eb8f; }
-.tool-call-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
+  margin: 4px 0 4px 24px;
   background: transparent;
-  border: none;
-  text-align: left;
-  font-size: 13px;
-  color: var(--color-text);
-  cursor: pointer;
-  transition: background 120ms;
 }
-.tool-call-header:hover { background: var(--color-surface-hover); }
-.tool-call-icon { font-size: 14px; line-height: 1; }
-.tool-call-name { font-weight: 600; flex: 1; }
+.tool-call-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  background: #f5f3eb;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tool-call-header:hover { background: var(--color-accent-soft); color: var(--color-accent); }
+.tool-call-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; }
 .tool-call-status {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 8px;
-  background: var(--color-bg);
+  background: rgba(0, 0, 0, 0.06);
   color: var(--color-muted);
 }
-.tool-call-item.is-ok .tool-call-status { background: #f6ffed; color: #389e0d; }
-.tool-call-item.is-error .tool-call-status { background: #fff1f0; color: #cf1322; }
-.tool-call-caret { font-size: 12px; color: var(--color-muted); }
+.tool-call-item.is-ok .tool-call-status { background: #e6f4ea; color: #23743a; }
+.tool-call-item.is-error .tool-call-status { background: #fff1f0; color: #a8071a; }
+.tool-call-item.is-running .tool-call-status { background: #e6f4ff; color: #1d39c4; }
+.tool-call-caret { font-size: 10px; }
 .tool-call-body {
-  padding: 8px 12px;
-  border-top: 1px solid var(--color-border);
-  background: var(--color-bg);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  margin: 4px 0 6px 8px;
+  padding: 0 0 0 8px;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 12px;
 }
-.tool-call-summary { font-size: 12px; color: var(--color-muted); }
+.tool-call-summary { padding: 2px 0; }
 
 /* Previewer tab bar */
 .previewer {

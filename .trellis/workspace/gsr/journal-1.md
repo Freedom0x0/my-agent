@@ -175,3 +175,25 @@ P: BubbleActions (Copy 1.5s 反馈 + 互斥 👍/👎) + UserBubble 编辑模式
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: fix-preview-parse-stuck: parse 失败不再静默
+<!-- trellis-session: v=2 fp=d2735bee500e8465 -->
+
+**Date**: 2026-09-17
+**Task**: fix-preview-parse-stuck: parse 失败不再静默
+**Branch**: `master`
+
+### Summary
+
+uploadFile catch 块静默吞 parseWorkbook 错误 → previewer 永远显示"正在解析该文件..."。修：store 加 fileParseErrors (不 persist); catch 记录 error; Previewer 检测 error 显示 '解析失败' + 重试按钮; 新增 clearFileParseError action + removeFile 联动清理; test/setup.ts 加 File.prototype.arrayBuffer polyfill。41/41 前端通过 (4 新: parse fail UI + 重试清除 + 正常路径回归 + retry click), TS 0 错误, build 成功。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4f52324` | fix(frontend): 修复 previewer 卡在"正在解析" — parseWorkbook 失败静默吞 |
+
+### Status
+
+[OK] **Completed**
