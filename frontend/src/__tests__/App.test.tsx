@@ -13,6 +13,7 @@ const hoisted = vi.hoisted(() => ({
     chatStream: vi.fn(),
     readSseStream: vi.fn(),
   },
+  parseWorkbookMock: vi.fn(),
 }));
 
 vi.mock("../api/httpClient", async () => {
@@ -34,6 +35,19 @@ vi.mock("../api/httpClient", async () => {
   };
 });
 
+vi.mock("../hooks/useSpreadsheet", async () => {
+  const actual = await vi.importActual<typeof import("../hooks/useSpreadsheet")>(
+    "../hooks/useSpreadsheet",
+  );
+  // Default: delegate to the real implementation. Tests override with
+  // .mockImplementationOnce to simulate parse failures.
+  hoisted.parseWorkbookMock.mockImplementation(actual.parseWorkbook);
+  return {
+    ...actual,
+    parseWorkbook: hoisted.parseWorkbookMock,
+  };
+});
+
 const mockedApi = api as unknown as {
   uploadFile: ReturnType<typeof vi.fn>;
   chat: ReturnType<typeof vi.fn>;
@@ -51,6 +65,9 @@ beforeEach(() => {
   mockedApi.listSessions.mockResolvedValue([]);
   hoisted.sseMock.chatStream.mockReset();
   hoisted.sseMock.readSseStream.mockReset();
+  // Clear call history but keep the default implementation (set in vi.mock
+  // factory above) so non-override tests still get the real parseWorkbook.
+  hoisted.parseWorkbookMock.mockClear();
   // Default: chatStream returns a dummy reader; readSseStream invokes onEvent
   // with nothing. Tests that need SSE behavior override these directly.
   hoisted.sseMock.chatStream.mockResolvedValue({} as ReadableStreamDefaultReader<Uint8Array>);
@@ -68,6 +85,7 @@ beforeEach(() => {
     outputPreviews: {},
     previewLoading: false,
     previewError: null,
+    fileParseErrors: {},
     tabsBySession: {},
     activeTabBySession: {},
     streamingContent: "",
@@ -889,5 +907,100 @@ describe("T. Output business-friendly (output_name)", () => {
     const tab = useAppStore.getState().tabsBySession[sid].find((t) => t.id === id);
     expect(tab?.outputName).toBe("按部门");
     expect(tab?.fileName).toBe("按部门");
+  });
+});
+
+describe("U. Previewer parse failure surface", () => {
+  it("shows 解析失败 + retry button when parseWorkbook throws, instead of 正在解析", async () => {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+    hoisted.parseWorkbookMock.mockImplementationOnce(() => {
+      throw new Error("无法预览该文件格式");
+    });
+
+    render(<App />);
+
+    const file = new File(["not-a-real-xlsx"], "broken.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    await useAppStore.getState().uploadFile(file);
+
+    await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+    await waitFor(() => expect(useAppStore.getState().status).toBe("ready"));
+
+    const errBlock = await screen.findByTestId("previewer-error");
+    expect(errBlock).toBeInTheDocument();
+    expect(errBlock.textContent).toContain("解析失败");
+    expect(errBlock.textContent).toContain("无法预览该文件格式");
+
+    const retry = screen.getByTestId("previewer-error-retry");
+    expect(retry).toBeInTheDocument();
+    expect(retry.textContent).toBe("重试");
+
+    expect(screen.queryByText("正在解析该文件")).toBeNull();
+
+    const sid = useAppStore.getState().currentSessionId!;
+    const fileId = useAppStore.getState().files[0].id;
+    expect(useAppStore.getState().fileParseErrors[fileId]).toBe("无法预览该文件格式");
+    expect(useAppStore.getState().tabsBySession[sid][0].refId).toBe(fileId);
+  });
+
+  it("clearFileParseError removes the error and falls back to 正在解析", async () => {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+    hoisted.parseWorkbookMock.mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+
+    render(<App />);
+
+    const file = new File(["bad"], "broken.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    await useAppStore.getState().uploadFile(file);
+    await screen.findByTestId("previewer-error");
+
+    const fileId = useAppStore.getState().files[0].id;
+    useAppStore.getState().clearFileParseError(fileId);
+
+    expect(useAppStore.getState().fileParseErrors[fileId]).toBeUndefined();
+    await waitFor(() => expect(screen.queryByTestId("previewer-error")).toBeNull());
+    expect(screen.getByText(/正在解析该文件/)).toBeInTheDocument();
+  });
+
+  it("retry button click clears the error and re-renders 正在解析 placeholder", async () => {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+    hoisted.parseWorkbookMock.mockImplementationOnce(() => {
+      throw new Error("无法预览该文件格式");
+    });
+
+    render(<App />);
+
+    await useAppStore.getState().uploadFile(
+      new File(["bad"], "broken.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    );
+    const errBlock = await screen.findByTestId("previewer-error");
+
+    fireEvent.click(screen.getByTestId("previewer-error-retry"));
+
+    await waitFor(() => expect(errBlock).not.toBeInTheDocument());
+    expect(screen.getByText(/正在解析该文件/)).toBeInTheDocument();
+  });
+
+  it("successful upload still renders the normal SpreadsheetPreview (no error UI)", async () => {
+    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+
+    render(<App />);
+
+    await useAppStore.getState().uploadFile(
+      new File(["x"], "sample.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    );
+    await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+
+    expect(screen.queryByTestId("previewer-error")).toBeNull();
+    expect(screen.getByTestId("spreadsheet-preview")).toBeInTheDocument();
+    expect(useAppStore.getState().fileParseErrors).toEqual({});
   });
 });

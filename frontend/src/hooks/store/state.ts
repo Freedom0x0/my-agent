@@ -37,6 +37,7 @@ export type WorkflowState = {
   outputPreviews: Record<string, WorkbookPreview>;
   previewLoading: boolean;
   previewError: string | null;
+  fileParseErrors: Record<string, string>;
   tabsBySession: Record<string, Tab[]>;
   activeTabBySession: Record<string, string>;
   streamingContent: string;
@@ -72,6 +73,7 @@ export const initial: WorkflowState = {
   outputPreviews: {},
   previewLoading: false,
   previewError: null,
+  fileParseErrors: {},
   tabsBySession: {},
   activeTabBySession: {},
   streamingContent: "",

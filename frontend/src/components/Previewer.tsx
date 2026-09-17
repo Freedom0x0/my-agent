@@ -29,6 +29,8 @@ export function Previewer() {
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const uploadFile = useAppStore((s) => s.uploadFile);
   const addEmptyTab = useAppStore((s) => s.addEmptyTab);
+  const clearFileParseError = useAppStore((s) => s.clearFileParseError);
+  const fileParseErrors = useAppStore((s) => s.fileParseErrors);
 
   const tabs = currentSessionId ? tabsBySession[currentSessionId] ?? [] : [];
   const activeTabId = currentSessionId ? activeTabBySession[currentSessionId] ?? "" : "";
@@ -175,7 +177,21 @@ export function Previewer() {
             }
           />
         )}
-        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && (
+        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && activeTab?.kind === "file" && fileParseErrors[activeTab.refId] && (
+          <div className="empty-state previewer-error" data-testid="previewer-error">
+            <p className="empty-title">解析失败</p>
+            <p className="empty-sub">{fileParseErrors[activeTab.refId]}</p>
+            <button
+              type="button"
+              className="empty-action-btn"
+              data-testid="previewer-error-retry"
+              onClick={() => activeTab && clearFileParseError(activeTab.refId)}
+            >
+              重试
+            </button>
+          </div>
+        )}
+        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && !(activeTab?.kind === "file" && fileParseErrors[activeTab.refId]) && (
           <div className="empty-state previewer-empty">
             <p className="empty-title">{activeTab?.fileName ?? "加载中"}</p>
             <p className="empty-sub">正在解析该文件…</p>

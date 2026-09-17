@@ -46,3 +46,15 @@ if (typeof window !== "undefined" && !window.IntersectionObserver) {
     value: IntersectionObserverStub,
   });
 }
+
+// jsdom < 22 lacks File.prototype.arrayBuffer; client-side preview reads
+// the file as ArrayBuffer before handing it to parseWorkbook.
+if (typeof File !== "undefined" && !File.prototype.arrayBuffer) {
+  File.prototype.arrayBuffer = function arrayBufferPolyfill(): Promise<ArrayBuffer> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}

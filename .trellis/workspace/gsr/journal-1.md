@@ -153,3 +153,25 @@ P: BubbleActions (Copy 1.5s 反馈 + 互斥 👍/👎) + UserBubble 编辑模式
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: flat-message-timeline: 工具调用扁平化 + 折叠
+<!-- trellis-session: v=2 fp=63f56323472e7779 -->
+
+**Date**: 2026-09-17
+**Task**: flat-message-timeline: 工具调用扁平化 + 折叠
+**Branch**: `master`
+
+### Summary
+
+新 ToolCallItem (可折叠, 默认折叠, click 展开 summary + SheetLinkChip); App.tsx bubbleItems 构建: assistant 消息含 1 文本 + N toolCalls → 1 文本气泡 + N ToolCallItem (按时间顺序交替); AssistantBubble 删 ToolProgressBar/ToolTimeline footer; SheetLinkChip 修 pre-existing 无限循环 bug (EMPTY_TABS 模块级常量); 修 1 个 testid 重复。37/37 前端通过, TS 0 错误, build 成功。ToolProgressBar.tsx + 旧 CSS 暂留作 follow-up 清理。spec 落 frontend/message-bubbles.md Flat Timeline 段。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c43a817` | feat(frontend): flat timeline — 工具调用扁平化按时间顺序交替渲染 |
+
+### Status
+
+[OK] **Completed**

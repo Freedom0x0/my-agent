@@ -15,6 +15,7 @@ export type Actions = {
   // Uploads
   uploadFile: (file: File) => Promise<void>;
   removeFile: (fileId: string) => void;
+  clearFileParseError: (fileId: string) => void;
 
   // Chat
   sendMessage: (text: string) => Promise<void>;

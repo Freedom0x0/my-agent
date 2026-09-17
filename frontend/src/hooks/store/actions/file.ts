@@ -1,7 +1,7 @@
 import { ApiError, api } from "../../../api/httpClient";
 import { makeUserFacingError, mapUploadResponse } from "../../../api/mappers";
 import { parseWorkbook } from "../../useSpreadsheet";
-import type { FileItem, WorkbookPreview } from "../../../domain/workflow";
+import type { FileItem } from "../../../domain/workflow";
 import type { Actions, WorkflowState } from "../types";
 
 type Set = (
@@ -9,7 +9,7 @@ type Set = (
 ) => void;
 type Get = () => WorkflowState & Actions;
 
-export function fileActions(set: Set, get: Get): Pick<Actions, "uploadFile" | "removeFile"> {
+export function fileActions(set: Set, get: Get): Pick<Actions, "uploadFile" | "removeFile" | "clearFileParseError"> {
   return {
     uploadFile: async (file: File) => {
       const { currentSessionId } = get();
@@ -34,17 +34,19 @@ export function fileActions(set: Set, get: Get): Pick<Actions, "uploadFile" | "r
         files: [...s.files, uploaded],
       }));
 
-      // Client-side preview (non-blocking failure).
-      let preview: WorkbookPreview | null = null;
       try {
         const buffer = await file.arrayBuffer();
-        preview = parseWorkbook(buffer, file.name);
+        const preview = parseWorkbook(buffer, file.name);
         set((s) => ({
           status: "ready",
-          filePreviews: { ...s.filePreviews, [uploaded.id]: preview! },
+          filePreviews: { ...s.filePreviews, [uploaded.id]: preview },
         }));
-      } catch {
-        set({ status: "ready" });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "无法解析该文件";
+        set((s) => ({
+          status: "ready",
+          fileParseErrors: { ...s.fileParseErrors, [uploaded.id]: message },
+        }));
       }
 
       // Fill an existing empty tab if the user prepared one; otherwise add a new tab.
@@ -74,15 +76,26 @@ export function fileActions(set: Set, get: Get): Pick<Actions, "uploadFile" | "r
 
     removeFile: (fileId: string) => {
       set((s) => {
-        const { [fileId]: _, ...rest } = s.filePreviews;
-        void _;
+        const { [fileId]: _preview, ...rest } = s.filePreviews;
+        void _preview;
+        const { [fileId]: _err, ...restErrors } = s.fileParseErrors;
+        void _err;
         return {
           files: s.files.filter((f) => f.id !== fileId),
           filePreviews: rest,
+          fileParseErrors: restErrors,
           ...(s.activePreview?.kind === "file" && s.activePreview.fileId === fileId
             ? { activePreview: null }
             : {}),
         };
+      });
+    },
+
+    clearFileParseError: (fileId: string) => {
+      set((s) => {
+        const { [fileId]: _, ...rest } = s.fileParseErrors;
+        void _;
+        return { fileParseErrors: rest };
       });
     },
   };
