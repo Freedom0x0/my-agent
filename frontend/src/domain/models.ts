@@ -58,11 +58,16 @@ export type ToolCallResult = {
   outputName?: string | null;
 };
 
+export type Segment =
+  | { type: "text"; content: string }
+  | { type: "tool"; call: ToolCallResult; outputName?: string | null };
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   toolCalls?: ToolCallResult[];
+  segments?: Segment[];
   outputId?: string | null;
   outputName?: string | null;
   sheets?: string[];

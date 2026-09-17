@@ -464,44 +464,19 @@ button { font: inherit; cursor: pointer; }
 .tool-timeline-tool { font-weight: 600; }
 .tool-timeline-summary { color: var(--color-muted); }
 
-/* Flat timeline — ToolCallItem (minimal: subtle indent + light bg, no card border) */
-.tool-call-item {
-  margin: 4px 0 4px 24px;
-  background: transparent;
-}
-.tool-call-header {
+/* Inline tool call (replaces standalone ToolCallItem) */
+.tool-inline {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 6px;
-  background: #f5f3eb;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--color-muted);
-  font-size: 12px;
-  cursor: pointer;
+  gap: 4px;
+  margin: 0 2px;
+  vertical-align: baseline;
 }
-.tool-call-header:hover { background: var(--color-accent-soft); color: var(--color-accent); }
-.tool-call-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; }
-.tool-call-status {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--color-muted);
+.tool-inline-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  color: var(--color-accent);
 }
-.tool-call-item.is-ok .tool-call-status { background: #e6f4ea; color: #23743a; }
-.tool-call-item.is-error .tool-call-status { background: #fff1f0; color: #a8071a; }
-.tool-call-item.is-running .tool-call-status { background: #e6f4ff; color: #1d39c4; }
-.tool-call-caret { font-size: 10px; }
-.tool-call-body {
-  margin: 4px 0 6px 8px;
-  padding: 0 0 0 8px;
-  border-left: 2px solid var(--color-border);
-  color: var(--color-muted);
-  font-size: 12px;
-}
-.tool-call-summary { padding: 2px 0; }
 
 /* Previewer tab bar */
 .previewer {

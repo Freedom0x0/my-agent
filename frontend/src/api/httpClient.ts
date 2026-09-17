@@ -6,4 +6,4 @@ export { api } from "./index";
 export { ApiError } from "./http";
 export type { RequestOptions } from "./http";
 export { chatStream, readSseStream } from "./chat";
-export type { StreamEvent, StreamToolCall } from "./chat";
+export type { StreamEvent, StreamToolCall, StreamSegment } from "./chat";

@@ -461,19 +461,142 @@ describe("Q. Markdown rendering", () => {
   });
 });
 
-describe("Flat message timeline (R replacement)", () => {
-  it("renders 1 text + N ToolCallItems interleaved for an assistant message with tool calls", () => {
-    const id = "flat-1";
+describe("Inline tool in bubble (segments)", () => {
+  it("renders 1 bubble with text + tool inlines interleaved when segments present", () => {
+    const id = "seg-1";
     useAppStore.setState({
       messages: [
         {
           id,
           role: "assistant",
-          content: "已完成",
-          toolCalls: [
-            { tool: "tablex_normalize", status: "ok", summary: "统一金额格式" },
-            { tool: "tablex_export", status: "ok", summary: "导出结果", outputId: "out-1" },
+          content: "",
+          segments: [
+            { type: "text", content: "已完成" },
+            {
+              type: "tool",
+              call: { tool: "tablex_normalize", status: "ok", summary: "统一金额格式" },
+              outputName: null,
+            },
+            {
+              type: "tool",
+              call: { tool: "tablex_export", status: "ok", summary: "导出结果", outputId: "out-1" },
+              outputName: "清洗后数据",
+            },
           ],
+          toolCalls: [],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    const bubble = screen.getByTestId(`assistant-bubble-${id}`);
+    expect(bubble).toBeInTheDocument();
+    expect(bubble.querySelectorAll(".tool-inline")).toHaveLength(2);
+    expect(screen.getByTestId("tool-inline-tablex_normalize")).toBeInTheDocument();
+    expect(screen.getByTestId("tool-inline-tablex_export")).toBeInTheDocument();
+    expect(bubble.textContent).toContain("已完成");
+    expect(bubble.textContent).toContain("tablex_normalize");
+    expect(bubble.textContent).toContain("tablex_export");
+  });
+
+  it("renders SheetLinkChip inline next to tool that has outputName", () => {
+    const id = "seg-2";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "",
+          segments: [
+            {
+              type: "tool",
+              call: { tool: "tablex_export", status: "ok", summary: "导出", outputId: "out-1" },
+              outputName: "结果表",
+            },
+          ],
+          toolCalls: [],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    expect(screen.getByTestId("tool-inline-tablex_export")).toBeInTheDocument();
+    const chip = screen.getByTestId("sheet-link-chip");
+    expect(chip).toBeInTheDocument();
+    expect(chip.textContent).toContain("结果表");
+  });
+
+  it("does NOT render SheetLinkChip when tool has no outputName", () => {
+    const id = "seg-3";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "",
+          segments: [
+            {
+              type: "tool",
+              call: { tool: "tablex_normalize", status: "ok", summary: "1" },
+              outputName: null,
+            },
+          ],
+          toolCalls: [],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    expect(screen.getByTestId("tool-inline-tablex_normalize")).toBeInTheDocument();
+    expect(screen.queryByTestId("sheet-link-chip")).toBeNull();
+  });
+
+  it("falls back to content + toolCalls when segments absent (legacy message)", () => {
+    const id = "seg-4";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "旧消息",
+          segments: undefined,
+          toolCalls: [
+            { tool: "t_legacy", status: "ok", summary: "1" },
+          ],
+          outputId: null,
+          sheets: [],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    render(<App />);
+    const bubble = screen.getByTestId(`assistant-bubble-${id}`);
+    expect(bubble.textContent).toContain("旧消息");
+    expect(screen.getByTestId("tool-inline-t_legacy")).toBeInTheDocument();
+  });
+
+  it("renders 1 bubble even with empty content + tool (no separate ToolCallItem)", () => {
+    const id = "seg-5";
+    useAppStore.setState({
+      messages: [
+        {
+          id,
+          role: "assistant",
+          content: "",
+          segments: [
+            {
+              type: "tool",
+              call: { tool: "t_only", status: "ok", summary: "no text" },
+              outputName: null,
+            },
+          ],
+          toolCalls: [],
           outputId: null,
           sheets: [],
           timestamp: Date.now(),
@@ -482,54 +605,26 @@ describe("Flat message timeline (R replacement)", () => {
     });
     render(<App />);
     expect(screen.getByTestId(`assistant-bubble-${id}`)).toBeInTheDocument();
-    expect(screen.getByTestId(`tool-call-toggle-tablex_normalize`)).toBeInTheDocument();
-    expect(screen.getByTestId(`tool-call-toggle-tablex_export`)).toBeInTheDocument();
-    // default collapsed: body not present
-    expect(screen.queryByTestId(`tool-call-body-tablex_normalize`)).toBeNull();
-    // open the first one
-    fireEvent.click(screen.getByTestId(`tool-call-toggle-tablex_normalize`));
-    expect(screen.getByTestId(`tool-call-body-tablex_normalize`)).toBeInTheDocument();
-    expect(screen.getByTestId(`tool-call-body-tablex_normalize`).textContent).toContain("统一金额格式");
+    expect(screen.getByTestId("tool-inline-t_only")).toBeInTheDocument();
+    // exactly one bubble rendered (no separate ToolCallItem bubble)
+    expect(screen.getAllByTestId(/^assistant-bubble-/).length).toBe(1);
   });
 
-  it("preserves order across 3 tool calls (interleaved after text bubble)", () => {
-    const id = "flat-2";
-    useAppStore.setState({
-      messages: [
-        {
-          id,
-          role: "assistant",
-          content: "开始",
-          toolCalls: [
-            { tool: "t_alpha", status: "ok", summary: "1" },
-            { tool: "t_beta", status: "ok", summary: "2" },
-            { tool: "t_gamma", status: "ok", summary: "3" },
-          ],
-          outputId: null,
-          sheets: [],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    render(<App />);
-    const chat = document.querySelector(".workspace-chat")!;
-    const idxAlpha = chat.textContent!.indexOf("t_alpha");
-    const idxBeta = chat.textContent!.indexOf("t_beta");
-    const idxGamma = chat.textContent!.indexOf("t_gamma");
-    expect(idxAlpha).toBeGreaterThanOrEqual(0);
-    expect(idxBeta).toBeGreaterThan(idxAlpha);
-    expect(idxGamma).toBeGreaterThan(idxBeta);
-  });
-
-  it("renders no text bubble when assistant has toolCalls but empty content", () => {
-    const id = "flat-3";
+  it("preserves segment order: text -> tool -> text -> tool", () => {
+    const id = "seg-6";
     useAppStore.setState({
       messages: [
         {
           id,
           role: "assistant",
           content: "",
-          toolCalls: [{ tool: "t_only", status: "ok", summary: "no text" }],
+          segments: [
+            { type: "text", content: "first text" },
+            { type: "tool", call: { tool: "t_a", status: "ok", summary: "1" }, outputName: null },
+            { type: "text", content: "middle text" },
+            { type: "tool", call: { tool: "t_b", status: "ok", summary: "2" }, outputName: null },
+          ],
+          toolCalls: [],
           outputId: null,
           sheets: [],
           timestamp: Date.now(),
@@ -537,11 +632,19 @@ describe("Flat message timeline (R replacement)", () => {
       ],
     });
     render(<App />);
-    expect(screen.queryByTestId(`assistant-bubble-${id}`)).toBeNull();
-    expect(screen.getByTestId(`tool-call-toggle-t_only`)).toBeInTheDocument();
+    const bubble = screen.getByTestId(`assistant-bubble-${id}`);
+    const txt = bubble.textContent!;
+    const idxFirstText = txt.indexOf("first text");
+    const idxA = txt.indexOf("t_a");
+    const idxMiddleText = txt.indexOf("middle text");
+    const idxB = txt.indexOf("t_b");
+    expect(idxFirstText).toBeGreaterThanOrEqual(0);
+    expect(idxA).toBeGreaterThan(idxFirstText);
+    expect(idxMiddleText).toBeGreaterThan(idxA);
+    expect(idxB).toBeGreaterThan(idxMiddleText);
   });
 
-  it("user message still renders as a single bubble (no interleaving)", () => {
+  it("user message still renders as a single bubble (no tool inline leakage)", () => {
     const uid = "u-1";
     useAppStore.setState({
       messages: [
@@ -550,55 +653,10 @@ describe("Flat message timeline (R replacement)", () => {
     });
     render(<App />);
     expect(screen.getByTestId(`user-bubble-${uid}`)).toBeInTheDocument();
-    expect(screen.queryByText(/tool-call/i)).toBeNull();
+    expect(screen.queryByTestId(/^tool-inline-/)).toBeNull();
   });
 
-  it("ToolCallItem collapses again after second click", () => {
-    const id = "flat-4";
-    useAppStore.setState({
-      messages: [
-        {
-          id,
-          role: "assistant",
-          content: "x",
-          toolCalls: [{ tool: "t_toggle", status: "ok", summary: "s" }],
-          outputId: null,
-          sheets: [],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    render(<App />);
-    const btn = screen.getByTestId(`tool-call-toggle-t_toggle`);
-    fireEvent.click(btn);
-    expect(screen.getByTestId(`tool-call-body-t_toggle`)).toBeInTheDocument();
-    fireEvent.click(btn);
-    expect(screen.queryByTestId(`tool-call-body-t_toggle`)).toBeNull();
-  });
-
-  it("renders SheetLinkChip in ToolCallItem body when outputName present", () => {
-    const id = "flat-5";
-    useAppStore.setState({
-      messages: [
-        {
-          id,
-          role: "assistant",
-          content: "完成",
-          toolCalls: [
-            { tool: "t_export", status: "ok", summary: "导出", outputId: "out-1", outputName: "结果表" },
-          ],
-          outputId: null,
-          sheets: [],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    render(<App />);
-    fireEvent.click(screen.getByTestId(`tool-call-toggle-t_export`));
-    expect(screen.getByTestId("sheet-link-chip")).toBeInTheDocument();
-  });
-
-  it("streams new tool_end events as additional ToolCallItems in the timeline", async () => {
+  it("SSE done event with segments stores them on the assistant message", async () => {
     mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
 
     render(<App />);
@@ -612,6 +670,7 @@ describe("Flat message timeline (R replacement)", () => {
 
     hoisted.sseMock.readSseStream.mockImplementationOnce(
       async (_reader, onEvent) => {
+        onEvent({ type: "text", delta: "处理" });
         onEvent({ type: "tool_start", name: "tablex_normalize", id: "tu-1" });
         onEvent({
           type: "tool_end",
@@ -620,13 +679,22 @@ describe("Flat message timeline (R replacement)", () => {
           status: "ok",
           output_id: null,
         });
-        onEvent({ type: "text", delta: "ok" });
+        onEvent({ type: "text", delta: "完成" });
         onEvent({
           type: "done",
-          reply: "ok",
+          reply: "处理完成",
           tool_calls: [{ tool: "tablex_normalize", status: "ok", summary: "统一金额" }],
           output_id: null,
           sheets: [],
+          segments: [
+            { type: "text", content: "处理" },
+            {
+              type: "tool",
+              call: { tool: "tablex_normalize", status: "ok", summary: "统一金额" },
+              output_name: null,
+            },
+            { type: "text", content: "完成" },
+          ],
         });
       },
     );
@@ -635,8 +703,14 @@ describe("Flat message timeline (R replacement)", () => {
     await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
 
     const last = useAppStore.getState().messages.at(-1);
-    expect(last?.toolCalls?.[0]?.tool).toBe("tablex_normalize");
-    expect(await screen.findByTestId(`tool-call-toggle-tablex_normalize`)).toBeInTheDocument();
+    expect(last?.role).toBe("assistant");
+    expect(last?.segments).toBeDefined();
+    expect(last?.segments?.length).toBe(3);
+    expect(last?.segments?.[0]).toEqual({ type: "text", content: "处理" });
+    expect(last?.segments?.[1].type).toBe("tool");
+    expect(last?.segments?.[2]).toEqual({ type: "text", content: "完成" });
+
+    expect(await screen.findByTestId("tool-inline-tablex_normalize")).toBeInTheDocument();
   });
 });
 

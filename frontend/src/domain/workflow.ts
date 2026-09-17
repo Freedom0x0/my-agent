@@ -2,12 +2,13 @@ import type {
   AppStatus,
   ChatMessage,
   FileItem,
+  Segment,
   UserFacingError,
   WorkbookPreview,
 } from "./models";
 
 // Re-export types so consumers can import everything from one place.
-export type { AppStatus, ChatMessage, FileItem, UserFacingError, WorkbookPreview };
+export type { AppStatus, ChatMessage, FileItem, Segment, UserFacingError, WorkbookPreview };
 
 export type SessionSummary = {
   sessionId: string;

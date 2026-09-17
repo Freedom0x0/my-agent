@@ -512,6 +512,8 @@ async def process_chat_stream(
     )
     caller = stream_caller or _default_stream_caller or minimax_chat_stream
 
+    segments: list[dict[str, Any]] = []
+
     async def _check_disc() -> bool:
         if is_disconnected is None:
             return False
@@ -560,6 +562,8 @@ async def process_chat_stream(
 
         if stop_reason == "end_turn":
             text = _extract_text(content_blocks)
+            if text:
+                segments.append({"type": "text", "content": text})
             session.messages.append({"role": "assistant", "content": content_blocks})
             session.touch()
             store.persist_messages(session)
@@ -569,10 +573,14 @@ async def process_chat_stream(
                 "tool_calls": list(session.tool_calls_log),
                 "output_name": _last_output_name(session),
                 "sheets": list(session.tables.keys()),
+                "segments": segments,
             }
             return
 
         if stop_reason == "max_tokens":
+            text = _extract_text(content_blocks)
+            if text:
+                segments.append({"type": "text", "content": text})
             session.messages.append({"role": "assistant", "content": content_blocks})
             store.persist_messages(session)
             yield {
@@ -583,10 +591,14 @@ async def process_chat_stream(
                 "tool_calls": list(session.tool_calls_log),
                 "output_name": _last_output_name(session),
                 "sheets": list(session.tables.keys()),
+                "segments": segments,
             }
             return
 
         if stop_reason == "tool_use":
+            text = _extract_text(content_blocks)
+            if text:
+                segments.append({"type": "text", "content": text})
             session.messages.append({"role": "assistant", "content": content_blocks})
             tool_results: list[dict[str, Any]] = []
             for block in content_blocks:
@@ -638,6 +650,11 @@ async def process_chat_stream(
                 if result.data and "output_name" in result.data:
                     log_entry["output_name"] = result.data["output_name"]
                 session.tool_calls_log.append(log_entry)
+                segments.append({
+                    "type": "tool",
+                    "call": log_entry,
+                    "output_name": log_entry.get("output_name"),
+                })
                 yield {
                     "type": "tool_end",
                     "name": tool_call.name,

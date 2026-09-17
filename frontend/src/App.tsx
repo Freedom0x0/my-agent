@@ -25,7 +25,6 @@ import { SessionSidebar } from "./components/SessionSidebar";
 import { SenderPopover } from "./components/SenderPopover";
 import { AssistantBubble } from "./components/bubble/AssistantBubble";
 import { UserBubble } from "./components/bubble/UserBubble";
-import { ToolCallItem } from "./components/bubble/ToolCallItem";
 import { useAppStore, bootstrapApp } from "./hooks/useAppStore";
 
 const theme = {
@@ -92,25 +91,15 @@ export function App() {
       });
       return;
     }
-    // assistant
-    if (m.content) {
-      bubbleItems.push({
-        key: `${m.id}::text`,
-        role: "assistant",
-        content: <AssistantBubble message={m} />,
-      });
-    }
-    (m.toolCalls ?? []).forEach((tc, i) => {
-      bubbleItems.push({
-        key: `${m.id}::tc::${i}::${tc.tool}`,
-        role: "assistant",
-        content: <ToolCallItem toolCall={tc} />,
-      });
+    bubbleItems.push({
+      key: m.id,
+      role: "assistant",
+      content: <AssistantBubble message={m} />,
     });
   });
-  if (streamingMessageId && streamingContent) {
+  if (streamingMessageId && (streamingContent || (lastChatToolCalls.length > 0))) {
     bubbleItems.push({
-      key: `${streamingMessageId}::text`,
+      key: streamingMessageId,
       role: "assistant",
       content: (
         <AssistantBubble
@@ -119,19 +108,11 @@ export function App() {
             id: streamingMessageId,
             role: "assistant",
             content: streamingContent,
+            toolCalls: lastChatToolCalls,
             timestamp: Date.now(),
           }}
         />
       ),
-    });
-  }
-  if (streamingMessageId && lastChatToolCalls.length > 0) {
-    lastChatToolCalls.forEach((tc, i) => {
-      bubbleItems.push({
-        key: `${streamingMessageId}::tc::${i}::${tc.tool}`,
-        role: "assistant",
-        content: <ToolCallItem toolCall={tc} />,
-      });
     });
   }
 

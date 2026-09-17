@@ -37,6 +37,18 @@ export const messageDtoSchema = z.object({
   // backend stores assistant content as either a string or content_blocks list
   content: z.union([z.string(), z.array(z.record(z.unknown()))]),
   tool_calls: z.array(toolCallResultDtoSchema).optional(),
+  segments: z
+    .array(
+      z.union([
+        z.object({ type: z.literal("text"), content: z.string() }),
+        z.object({
+          type: z.literal("tool"),
+          call: toolCallResultDtoSchema,
+          output_name: z.string().nullable().optional(),
+        }),
+      ]),
+    )
+    .optional(),
 });
 
 export const sessionDetailSchema = z.object({

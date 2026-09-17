@@ -6,6 +6,14 @@ import {
 } from "./contracts";
 import { ApiError, getApiBase, httpClient, newRequestId, type RequestOptions } from "./http";
 
+export type StreamSegment =
+  | { type: "text"; content: string }
+  | {
+      type: "tool";
+      call: { tool: string; status: "ok" | "error"; summary: string; output_id?: string | null };
+      output_name?: string | null;
+    };
+
 export function chat(payload: ChatRequest, options?: RequestOptions): Promise<ChatResponse> {
   // Validate on the wire boundary — keeps hooks free of duplication.
   const body = chatRequestSchema.parse(payload);
@@ -18,7 +26,7 @@ export type StreamEvent =
   | { type: "text"; delta: string }
   | { type: "tool_start"; name: string; id: string }
   | { type: "tool_end"; name: string; summary: string; status: string; output_id?: string | null; output_name?: string | null }
-  | { type: "done"; reply: string; tool_calls: StreamToolCall[]; output_id?: string | null; output_name?: string | null; sheets: string[] }
+  | { type: "done"; reply: string; tool_calls: StreamToolCall[]; output_id?: string | null; output_name?: string | null; sheets: string[]; segments?: StreamSegment[] }
   | { type: "error"; code: string; message: string };
 
 export type StreamToolCall = {

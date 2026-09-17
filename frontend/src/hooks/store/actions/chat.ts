@@ -2,7 +2,7 @@ import { ApiError, api, chatStream, readSseStream } from "../../../api/httpClien
 import type { StreamEvent, StreamToolCall } from "../../../api/httpClient";
 import { makeUserFacingError } from "../../../api/mappers";
 import { parseWorkbook } from "../../useSpreadsheet";
-import type { ChatMessage } from "../../../domain/workflow";
+import type { ChatMessage, Segment } from "../../../domain/workflow";
 import { newMessageId } from "../types";
 import type { Actions, WorkflowState } from "../types";
 
@@ -50,6 +50,7 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
           output_id: string | null;
           output_name: string | null;
           sheets: string[];
+          segments?: Segment[];
         } | null;
       } = { value: null };
       const errorBox: { value: { code: string; message: string } | null } = { value: null };
@@ -71,6 +72,7 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
               outputId: t.output_id ?? null,
               outputName: t.output_name ?? null,
             })),
+            segments: doneEvent.segments,
             outputId: doneEvent.output_id ?? null,
             outputName: finalOutputName,
             sheets: doneEvent.sheets ?? [],
@@ -197,6 +199,21 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
                 output_id: evt.output_id ?? null,
                 output_name: evt.output_name ?? null,
                 sheets: evt.sheets,
+                segments: evt.segments?.map((s): Segment =>
+                  s.type === "text"
+                    ? { type: "text", content: s.content }
+                    : {
+                        type: "tool",
+                        call: {
+                          tool: s.call.tool,
+                          status: s.call.status,
+                          summary: s.call.summary,
+                          outputId: s.call.output_id ?? null,
+                          outputName: s.output_name ?? null,
+                        },
+                        outputName: s.output_name ?? null,
+                      },
+                ),
               };
               break;
             case "error":
