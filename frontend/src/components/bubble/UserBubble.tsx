@@ -5,14 +5,16 @@ import { useAppStore } from "../../hooks/useAppStore";
 import type { ChatMessage } from "../../domain/models";
 
 type Props = {
-  message: ChatMessage;
+  id: string;
 };
 
-export function UserBubble({ message }: Props) {
-  const messages = useAppStore((s) => s.messages);
+export function UserBubble({ id }: Props) {
+  const message = useAppStore((s) => s.messages.find((m) => m.id === id));
   const sendMessage = useAppStore((s) => s.sendMessage);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(message.content);
+  const [draft, setDraft] = useState(message?.content ?? "");
+
+  if (!message) return null;
 
   const startEdit = () => {
     setDraft(message.content);
@@ -30,6 +32,9 @@ export function UserBubble({ message }: Props) {
       cancelEdit();
       return;
     }
+    // Read the live list off the store rather than subscribing to it — this bubble
+    // would otherwise re-render on every streamed token.
+    const messages = useAppStore.getState().messages;
     const idx = messages.findIndex((m) => m.id === message.id);
     if (idx < 0) {
       setEditing(false);
@@ -44,7 +49,6 @@ export function UserBubble({ message }: Props) {
     const replaced: ChatMessage = { ...message, content: next };
     useAppStore.setState({
       messages: [...truncated, replaced],
-      streamingContent: "",
       streamingMessageId: null,
     });
     setEditing(false);

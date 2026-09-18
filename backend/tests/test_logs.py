@@ -1,8 +1,13 @@
 """Tests for the logging ring buffer, middleware, and /api/logs/recent endpoint."""
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.config import get_settings
+from backend.app.db import init_db
 from backend.app.logging_setup import (
     LOG_FORMAT,
     RING_CAPACITY,
@@ -19,11 +24,22 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
-def setup_function(_func) -> None:
-    """Reset the ring before every test so they don't bleed into each other."""
+@pytest.fixture(autouse=True)
+def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Point everything at a temp dir — these tests used to write into runtime/."""
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path / "runtime"))
+    # No model: /api/chat then fails fast with `model_not_configured` (a 200 with an
+    # error_code) instead of making a real, slow, billable call to the provider.
+    monkeypatch.setenv("MODEL_BASE_URL", "")
+    monkeypatch.setenv("MODEL_API_KEY", "")
+    monkeypatch.setenv("MODEL_NAME", "")
+    get_settings.cache_clear()
+    init_db(tmp_path / "runtime" / "metadata.db")
     reset_ring()
-    setup_logging("runtime/logs")
+    setup_logging(tmp_path / "logs")
     get_ring().clear()
+    yield
+    get_settings.cache_clear()
 
 
 def test_ring_buffer_starts_empty_and_captures_log() -> None:
@@ -198,3 +214,34 @@ def test_ring_buffer_default_formatter_works() -> None:
     handler.emit(log)
     assert "formatted" in handler.snapshot()[0]
     assert "[rid]" in handler.snapshot()[0]
+
+
+def test_ring_captures_records_that_lack_a_request_id() -> None:
+    """`logger.exception` and third-party loggers never go through `log_event`.
+
+    Without the ring's own filter, `format()` raised on the missing field and
+    `handleError` swallowed it — so the log panel silently lost exactly the error
+    lines it exists to show.
+    """
+    import logging as _logging
+
+    _logging.getLogger("app").warning("plain warning, no request_id")
+    lines = get_ring().snapshot()
+    assert any("plain warning, no request_id" in ln and "[-]" in ln for ln in lines)
+
+
+def test_contextvar_request_id_reaches_a_plain_logger() -> None:
+    """This is what makes a bare `logger.exception(...)` in an endpoint traceable."""
+    import logging as _logging
+
+    from backend.app.logging_setup import reset_request_id, set_request_id
+
+    token = set_request_id("ctx-123")
+    try:
+        _logging.getLogger("app").warning("from a logger call")
+    finally:
+        reset_request_id(token)
+
+    assert any(
+        "[ctx-123]" in ln and "from a logger call" in ln for ln in get_ring().snapshot()
+    )

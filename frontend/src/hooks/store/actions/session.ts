@@ -1,5 +1,5 @@
 import { ApiError, api } from "../../../api/httpClient";
-import { makeUserFacingError, mapSessionMessages } from "../../../api/mappers";
+import { makeUserFacingError, mapSessionMessages, mapUploadResponse } from "../../../api/mappers";
 import { newSessionId } from "../../../domain/workflow";
 import type { SessionSummary } from "../../../domain/workflow";
 import { SESSION_KEY } from "../state";
@@ -48,8 +48,6 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         activePreview: activeTab ? tabToPreview(activeTab) : null,
         lastChatSheets: [],
         lastChatOutputId: null,
-        previewError: null,
-        streamingContent: "",
         messageReactions: {},
       });
       localStorage.setItem(SESSION_KEY, id);
@@ -61,6 +59,9 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         set({
           outputIds: detail.output_ids ?? [],
           messages: mapped,
+          // Files belong to the conversation — restore them so the sheet list and
+          // previews come back with the history instead of needing a re-upload.
+          files: (detail.files ?? []).map(mapUploadResponse),
           sessionHasMore: { ...get().sessionHasMore, [id]: detail.has_more ?? false },
           oldestLoadedIndexBySession: { ...get().oldestLoadedIndexBySession, [id]: oldestIndex },
         });
@@ -86,8 +87,6 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         activeTabBySession: { ...get().activeTabBySession, [id]: "" },
         lastChatSheets: [],
         lastChatOutputId: null,
-        previewError: null,
-        streamingContent: "",
         messageReactions: {},
       });
       localStorage.setItem(SESSION_KEY, id);

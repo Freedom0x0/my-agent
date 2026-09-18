@@ -5,6 +5,9 @@ import type { PreviewTarget, Tab } from "../../domain/workflow";
 export type { WorkflowState, PanelState, ReactionValue } from "./state";
 import type { ReactionValue } from "./state";
 
+/** Which preview cache a tab refId belongs to. */
+export type PreviewKind = "file" | "output";
+
 export type Actions = {
   // Sidebar
   loadSessions: () => Promise<void>;
@@ -15,7 +18,12 @@ export type Actions = {
   // Uploads
   uploadFile: (file: File) => Promise<void>;
   removeFile: (fileId: string) => void;
-  clearFileParseError: (fileId: string) => void;
+  /** Fetch + parse a tab's preview on demand; no-op when it's already cached. */
+  ensurePreview: (
+    kind: PreviewKind,
+    refId: string,
+    opts?: { force?: boolean; name?: string },
+  ) => Promise<void>;
 
   // Chat
   sendMessage: (text: string) => Promise<void>;
@@ -29,9 +37,22 @@ export type Actions = {
   removeTab: (sessionId: string, tabId: string) => void;
   setActiveTab: (sessionId: string, tabId: string) => void;
 
-  // Streaming
-  appendStream: (token: string) => void;
-  finishStream: () => void;
+  // Streaming — all of these patch the tail message's `segments` in place
+  appendTextDelta: (delta: string, opts?: { separate?: boolean }) => void;
+  pushToolStart: (id: string, name: string) => void;
+  resolveTool: (p: {
+    id?: string;
+    name: string;
+    status: "ok" | "error";
+    summary: string;
+    outputId?: string | null;
+    outputName?: string | null;
+  }) => void;
+  endStreamMessage: (meta?: {
+    outputId?: string | null;
+    outputName?: string | null;
+    sheets?: string[];
+  }) => void;
   abortStream: () => void;
 
   // Panels

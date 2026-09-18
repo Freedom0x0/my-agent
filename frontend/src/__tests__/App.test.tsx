@@ -29,6 +29,7 @@ vi.mock("../api/httpClient", async () => {
       getSession: vi.fn(),
       downloadUrl: vi.fn((id: string) => `/api/outputs/${id}`),
       download: vi.fn().mockRejectedValue(new Error("not mocked")),
+      downloadUploadedFile: vi.fn().mockRejectedValue(new Error("not mocked")),
     },
     chatStream: hoisted.sseMock.chatStream,
     readSseStream: hoisted.sseMock.readSseStream,
@@ -55,6 +56,7 @@ const mockedApi = api as unknown as {
   getSession: ReturnType<typeof vi.fn>;
   downloadUrl: ReturnType<typeof vi.fn>;
   download: ReturnType<typeof vi.fn>;
+  downloadUploadedFile: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -83,15 +85,11 @@ beforeEach(() => {
     activePreview: null,
     filePreviews: {},
     outputPreviews: {},
-    previewLoading: false,
-    previewError: null,
-    fileParseErrors: {},
+    previewErrors: {},
     tabsBySession: {},
     activeTabBySession: {},
-    streamingContent: "",
     streamingMessageId: null,
     streamController: null,
-    lastChatToolCalls: [],
     lastChatSheets: [],
     lastChatOutputId: null,
     lastChatOutputName: null,
@@ -253,7 +251,68 @@ describe("SSE streaming flow", () => {
     await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
   }
 
-  it("accumulates text deltas into streamingContent", async () => {
+  it("keeps the streamed timeline identical when the turn ends", async () => {
+    render(<App />);
+    // bootstrapApp() re-selects the session on mount and clears files — let it settle
+    // before uploading, or sendMessage bails on an empty file list.
+    await waitFor(() => expect(mockedApi.listSessions).toHaveBeenCalled());
+    await setupWithFile();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "text", delta: "先看一下" });
+        onEvent({ type: "tool_start", name: "tablex_export", id: "tu-9" });
+        onEvent({
+          type: "tool_end",
+          id: "tu-9",
+          name: "tablex_export",
+          summary: "导出结果",
+          status: "ok",
+          output_id: null,
+          output_name: null,
+        });
+        await held;
+        onEvent({
+          type: "done",
+          reply: "先看一下",
+          tool_calls: [],
+          output_id: null,
+          sheets: [],
+        });
+      },
+    );
+
+    const sendPromise = useAppStore.getState().sendMessage("导出");
+
+    // Mid-stream: the turn is still open and the bubble already shows the timeline.
+    await waitFor(() => {
+      expect(useAppStore.getState().messages.at(-1)?.streaming).toBe(true);
+    });
+    const streamingId = useAppStore.getState().streamingMessageId!;
+    await waitFor(() =>
+      expect(screen.getByTestId(`assistant-bubble-${streamingId}`)).toBeInTheDocument(),
+    );
+    const contentOf = () =>
+      screen.getByTestId(`assistant-bubble-${streamingId}`).querySelector(
+        ".assistant-bubble-content",
+      )?.innerHTML;
+    const duringHtml = contentOf();
+    expect(duringHtml).toContain("tablex_export");
+    expect(duringHtml).toContain("先看一下");
+
+    release();
+    await sendPromise;
+
+    // Same bubble id, same content DOM — the turn ending does not reflow the timeline.
+    expect(useAppStore.getState().streamingMessageId).toBeNull();
+    expect(contentOf()).toBe(duringHtml);
+  });
+
+  it("lands text deltas as one text segment on the streaming message", async () => {
     await setupWithFile();
     hoisted.sseMock.readSseStream.mockImplementationOnce(
       async (_reader, onEvent) => {
@@ -272,22 +331,24 @@ describe("SSE streaming flow", () => {
 
     await useAppStore.getState().sendMessage("hi");
 
-    await waitFor(() =>
-      expect(useAppStore.getState().streamingContent).toBe(""),
-    );
-    expect(useAppStore.getState().status).toBe("completed");
+    await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
     const last = useAppStore.getState().messages.at(-1);
     expect(last?.role).toBe("assistant");
+    expect(last?.streaming).toBe(false);
+    // Same message the user watched stream in — not a replacement built at the end.
+    expect(last?.segments).toEqual([{ type: "text", content: "你好，世界" }]);
     expect(last?.content).toBe("你好，世界");
   });
 
-  it("records tool_start and tool_end events into lastChatToolCalls", async () => {
+  it("interleaves tool calls with text in arrival order", async () => {
     await setupWithFile();
     hoisted.sseMock.readSseStream.mockImplementationOnce(
       async (_reader, onEvent) => {
+        onEvent({ type: "text", delta: "先看一下" });
         onEvent({ type: "tool_start", name: "tablex_normalize", id: "tu-1" });
         onEvent({
           type: "tool_end",
+          id: "tu-1",
           name: "tablex_normalize",
           summary: "统一金额格式",
           status: "ok",
@@ -296,7 +357,7 @@ describe("SSE streaming flow", () => {
         onEvent({ type: "text", delta: "done" });
         onEvent({
           type: "done",
-          reply: "done",
+          reply: "先看一下done",
           tool_calls: [],
           output_id: null,
           sheets: [],
@@ -306,26 +367,88 @@ describe("SSE streaming flow", () => {
 
     await useAppStore.getState().sendMessage("检查");
 
-    await waitFor(() =>
-      expect(useAppStore.getState().status).toBe("completed"),
-    );
-    const calls = useAppStore.getState().lastChatToolCalls;
-    expect(calls.some((c) => c.tool === "tablex_normalize" && c.summary === "统一金额格式")).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
+    const last = useAppStore.getState().messages.at(-1);
+    expect(last?.segments).toEqual([
+      { type: "text", content: "先看一下" },
+      {
+        type: "tool",
+        call: {
+          tool: "tablex_normalize",
+          id: "tu-1",
+          status: "ok",
+          summary: "统一金额格式",
+          outputId: null,
+          outputName: null,
+        },
+        outputName: null,
+      },
+      { type: "text", content: "done" },
+    ]);
   });
 
-  it("abortStream triggers AbortController and clears streaming state", async () => {
+  it("shows a running tool call before its result arrives", async () => {
+    await setupWithFile();
+    let midStream: ChatMessage | undefined;
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "tool_start", name: "tablex_export", id: "tu-9" });
+        midStream = useAppStore.getState().messages.at(-1);
+        onEvent({
+          type: "tool_end",
+          id: "tu-9",
+          name: "tablex_export",
+          summary: "导出结果",
+          status: "ok",
+          output_id: null,
+        });
+        onEvent({ type: "done", reply: "", tool_calls: [], output_id: null, sheets: [] });
+      },
+    );
+
+    await useAppStore.getState().sendMessage("导出");
+
+    await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
+    expect(midStream?.streaming).toBe(true);
+    expect(midStream?.segments).toEqual([
+      {
+        type: "tool",
+        call: { tool: "tablex_export", id: "tu-9", status: "running", summary: "" },
+      },
+    ]);
+  });
+
+  it("marks a failed tool call as error", async () => {
+    await setupWithFile();
+    hoisted.sseMock.readSseStream.mockImplementationOnce(
+      async (_reader, onEvent) => {
+        onEvent({ type: "tool_start", name: "tablex_pivot", id: "tu-3" });
+        onEvent({
+          type: "tool_end",
+          id: "tu-3",
+          name: "tablex_pivot",
+          summary: "参数校验失败",
+          status: "error",
+          output_id: null,
+        });
+        onEvent({ type: "done", reply: "", tool_calls: [], output_id: null, sheets: [] });
+      },
+    );
+
+    await useAppStore.getState().sendMessage("透视");
+
+    await waitFor(() => expect(useAppStore.getState().status).toBe("completed"));
+    const seg = useAppStore.getState().messages.at(-1)?.segments?.[0];
+    expect(seg?.type === "tool" && seg.call.status).toBe("error");
+  });
+
+  it("abortStream keeps the partial timeline instead of wiping it", async () => {
     await setupWithFile();
     let capturedSignal: AbortSignal | undefined;
     hoisted.sseMock.chatStream.mockImplementationOnce(
       async (_payload, signal) => {
         capturedSignal = signal;
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener("abort", () => {
-            const err = new Error("aborted");
-            err.name = "AbortError";
-            reject(err);
-          });
-        }) as unknown as ReadableStreamDefaultReader<Uint8Array>;
+        return {} as ReadableStreamDefaultReader<Uint8Array>;
       },
     );
     hoisted.sseMock.readSseStream.mockImplementationOnce(
@@ -348,8 +471,10 @@ describe("SSE streaming flow", () => {
 
     expect(capturedSignal?.aborted).toBe(true);
     expect(useAppStore.getState().status).toBe("idle");
-    expect(useAppStore.getState().streamingContent).toBe("");
     expect(useAppStore.getState().streamController).toBeNull();
+    const last = useAppStore.getState().messages.at(-1);
+    expect(last?.streaming).toBe(false);
+    expect(last?.segments).toEqual([{ type: "text", content: "partial " }]);
   });
 });
 
@@ -795,10 +920,13 @@ describe("T. Output business-friendly (output_name)", () => {
 
   function seed(opts: {
     file?: boolean;
+    /** Set false to model a session whose file tab was closed / never created here. */
+    fileTab?: boolean;
     tabOutput?: { id: string; outputName: string };
     message: { id?: string; content: string; outputName?: string | null; sheets?: string[] };
   }) {
     const sid = "s-chip";
+    const withFileTab = opts.file && opts.fileTab !== false;
     useAppStore.setState({
       currentSessionId: sid,
       files: opts.file
@@ -813,7 +941,7 @@ describe("T. Output business-friendly (output_name)", () => {
         : [],
       tabsBySession: {
         [sid]: [
-          ...(opts.file
+          ...(withFileTab
             ? [{ id: "tab-file-1", kind: "file", refId: fileId, fileName: "source.xlsx", openedAt: Date.now() }]
             : []),
           ...(opts.tabOutput
@@ -821,7 +949,7 @@ describe("T. Output business-friendly (output_name)", () => {
             : []),
         ],
       },
-      activeTabBySession: { [sid]: opts.tabOutput ? opts.tabOutput.id : "tab-file-1" },
+      activeTabBySession: { [sid]: opts.tabOutput ? opts.tabOutput.id : withFileTab ? "tab-file-1" : "" },
       messages: [
         {
           id: opts.message.id ?? "chip-msg",
@@ -838,7 +966,7 @@ describe("T. Output business-friendly (output_name)", () => {
 
   it("MarkdownContent renders outputName as SheetLinkChip", () => {
     seed({ message: { content: "已生成 按部门拆分", outputName: "按部门拆分" } });
-    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
     const chip = screen.getByTestId("sheet-link-chip");
     expect(chip.textContent).toContain("按部门拆分");
   });
@@ -848,14 +976,14 @@ describe("T. Output business-friendly (output_name)", () => {
       tabOutput: { id: "tab-out-1", outputName: "按部门拆分" },
       message: { content: "按部门拆分", outputName: "按部门拆分" },
     });
-    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
     fireEvent.click(screen.getByTestId("sheet-link-chip"));
     expect(useAppStore.getState().activeTabBySession["s-chip"]).toBe("tab-out-1");
   });
 
   it("SheetLinkChip click creates a new tab when none exists", () => {
     seed({ message: { content: "新结果", outputName: "新结果" } });
-    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
     const sid = "s-chip";
     const before = useAppStore.getState().tabsBySession[sid].length;
     fireEvent.click(screen.getByTestId("sheet-link-chip"));
@@ -869,7 +997,7 @@ describe("T. Output business-friendly (output_name)", () => {
 
   it("FileLinkChip is rendered and enabled for uploaded file_id", () => {
     seed({ file: true, message: { content: `数据源 ${fileId}` } });
-    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
     const chip = screen.getByTestId("file-link-chip");
     expect(chip).not.toBeDisabled();
     fireEvent.click(chip);
@@ -879,19 +1007,41 @@ describe("T. Output business-friendly (output_name)", () => {
   it("FileLinkChip is not rendered for unknown file_id (avoids false positives)", () => {
     const orphan = "ffffffffffffffffffffffffffffffff";
     seed({ message: { id: "orphan-msg", content: `未知文件 ${orphan}` } });
-    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
     expect(screen.queryByTestId("file-link-chip")).toBeNull();
+  });
+
+  it("FileLinkChip reopens the file when its tab is gone", () => {
+    // The file came back with the session, but this browser has no tab for it —
+    // closed by the user, or a fresh browser. The chip used to be dead here.
+    seed({ file: true, fileTab: false, message: { content: `数据源 ${fileId}` } });
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
+
+    const chip = screen.getByTestId("file-link-chip");
+    expect(chip).not.toBeDisabled();
+    // Label comes from the session's file list, not the raw id prefix.
+    expect(chip.textContent).toContain("source.xlsx");
+
+    fireEvent.click(chip);
+
+    const sid = "s-chip";
+    const tabs = useAppStore.getState().tabsBySession[sid];
+    const created = tabs[tabs.length - 1];
+    expect(created.kind).toBe("file");
+    expect(created.refId).toBe(fileId);
+    expect(created.fileName).toBe("source.xlsx");
+    expect(useAppStore.getState().activeTabBySession[sid]).toBe(created.id);
   });
 
   it("MarkdownContent still renders the legacy #sheet: link when sheets array is present", () => {
     seed({ message: { content: "结果是 清洗后数据", sheets: ["清洗后数据"] } });
-    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
     expect(screen.getByTestId("sheet-link")).toBeInTheDocument();
   });
 
   it("MarkdownContent renders SheetLinkChip with antd icon", () => {
     seed({ message: { content: "按部门拆分", outputName: "按部门拆分" } });
-    render(<AssistantBubble message={useAppStore.getState().messages[0]} />);
+    render(<AssistantBubble id={useAppStore.getState().messages[0].id} />);
     const chip = screen.getByTestId("sheet-link-chip");
     expect(chip.querySelector(".anticon")).toBeInTheDocument();
   });
@@ -1014,15 +1164,21 @@ describe("U. Previewer parse failure surface", () => {
 
     const sid = useAppStore.getState().currentSessionId!;
     const fileId = useAppStore.getState().files[0].id;
-    expect(useAppStore.getState().fileParseErrors[fileId]).toBe("无法预览该文件格式");
+    expect(useAppStore.getState().previewErrors[fileId]).toBe("无法预览该文件格式");
     expect(useAppStore.getState().tabsBySession[sid][0].refId).toBe(fileId);
   });
 
-  it("clearFileParseError removes the error and falls back to 正在解析", async () => {
+  it("retry re-fetches the file and renders the preview once it parses", async () => {
     mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
+    const fakePreview = {
+      filename: "broken.xlsx",
+      sheets: [{ name: "Sheet1", rows: [["a"]], totalRows: 1, truncated: false }],
+    };
     hoisted.parseWorkbookMock.mockImplementationOnce(() => {
-      throw new Error("boom");
+      throw new Error("无法预览该文件格式");
     });
+    hoisted.parseWorkbookMock.mockReturnValueOnce(fakePreview);
+    mockedApi.downloadUploadedFile.mockResolvedValueOnce(new ArrayBuffer(8));
 
     render(<App />);
 
@@ -1030,35 +1186,107 @@ describe("U. Previewer parse failure surface", () => {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
     await useAppStore.getState().uploadFile(file);
-    await screen.findByTestId("previewer-error");
+
+    const errBlock = await screen.findByTestId("previewer-error");
+    expect(errBlock.textContent).toContain("无法预览该文件格式");
+
+    fireEvent.click(screen.getByTestId("previewer-error-retry"));
 
     const fileId = useAppStore.getState().files[0].id;
-    useAppStore.getState().clearFileParseError(fileId);
-
-    expect(useAppStore.getState().fileParseErrors[fileId]).toBeUndefined();
+    await waitFor(() => expect(mockedApi.downloadUploadedFile).toHaveBeenCalledWith(fileId));
     await waitFor(() => expect(screen.queryByTestId("previewer-error")).toBeNull());
-    expect(screen.getByText(/正在解析该文件/)).toBeInTheDocument();
+    expect(useAppStore.getState().filePreviews[fileId]).toEqual(fakePreview);
+    expect(screen.getByTestId("spreadsheet-preview")).toBeInTheDocument();
   });
 
-  it("retry button click clears the error and re-renders 正在解析 placeholder", async () => {
-    mockedApi.uploadFile.mockResolvedValueOnce(sampleUploadResponse());
-    hoisted.parseWorkbookMock.mockImplementationOnce(() => {
-      throw new Error("无法预览该文件格式");
+  it("re-fetches a restored tab's preview on open (reload / session switch)", async () => {
+    // What a reload leaves behind: the tab list is persisted to local storage, the
+    // parsed preview cache is not. Nothing used to fetch it back.
+    const fakePreview = {
+      filename: "旧文件.xlsx",
+      sheets: [{ name: "Sheet1", rows: [["x"]], totalRows: 1, truncated: false }],
+    };
+    hoisted.parseWorkbookMock.mockReturnValueOnce(fakePreview);
+    mockedApi.downloadUploadedFile.mockResolvedValueOnce(new ArrayBuffer(8));
+    mockedApi.getSession.mockResolvedValueOnce({
+      session_id: "s-reload",
+      title: "旧会话",
+      updated_at: "",
+      message_count: 0,
+      last_user_msg: "",
+      messages: [],
+      output_ids: [],
+      files: [],
+      has_more: false,
+      oldest_index: 0,
+      total_messages: 0,
+    });
+
+    useAppStore.setState({
+      currentSessionId: "s-reload",
+      status: "ready",
+      tabsBySession: {
+        "s-reload": [
+          { id: "tab-1", kind: "file", refId: "f-old", fileName: "旧文件.xlsx", openedAt: 1 },
+        ],
+      },
+      activeTabBySession: { "s-reload": "tab-1" },
     });
 
     render(<App />);
 
-    await useAppStore.getState().uploadFile(
-      new File(["bad"], "broken.xlsx", {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      }),
-    );
-    const errBlock = await screen.findByTestId("previewer-error");
+    await waitFor(() => expect(mockedApi.downloadUploadedFile).toHaveBeenCalledWith("f-old"));
+    await waitFor(() => expect(screen.getByTestId("spreadsheet-preview")).toBeInTheDocument());
+    expect(useAppStore.getState().filePreviews["f-old"]).toEqual(fakePreview);
+    expect(screen.queryByTestId("previewer-error")).toBeNull();
+  });
 
-    fireEvent.click(screen.getByTestId("previewer-error-retry"));
+  it("fetches an output tab's preview from /api/outputs when it isn't cached", async () => {
+    // The other half of the same path: an export result reopened after a reload.
+    const fakePreview = {
+      filename: "清洗后数据.xlsx",
+      sheets: [{ name: "Sheet1", rows: [["a", "b"]], totalRows: 1, truncated: false }],
+    };
+    hoisted.parseWorkbookMock.mockReturnValueOnce(fakePreview);
+    mockedApi.download.mockResolvedValueOnce(new ArrayBuffer(8));
+    mockedApi.getSession.mockResolvedValueOnce({
+      session_id: "s-out",
+      title: "旧会话",
+      updated_at: "",
+      message_count: 0,
+      last_user_msg: "",
+      messages: [],
+      output_ids: ["out-1"],
+      files: [],
+      has_more: false,
+      oldest_index: 0,
+      total_messages: 0,
+    });
 
-    await waitFor(() => expect(errBlock).not.toBeInTheDocument());
-    expect(screen.getByText(/正在解析该文件/)).toBeInTheDocument();
+    useAppStore.setState({
+      currentSessionId: "s-out",
+      status: "ready",
+      tabsBySession: {
+        "s-out": [
+          {
+            id: "tab-out",
+            kind: "output",
+            refId: "out-1",
+            fileName: "清洗后数据",
+            outputName: "清洗后数据",
+            openedAt: 1,
+          },
+        ],
+      },
+      activeTabBySession: { "s-out": "tab-out" },
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockedApi.download).toHaveBeenCalledWith("out-1"));
+    await waitFor(() => expect(screen.getByTestId("spreadsheet-preview")).toBeInTheDocument());
+    expect(useAppStore.getState().outputPreviews["out-1"]).toEqual(fakePreview);
+    expect(screen.queryByTestId("previewer-error")).toBeNull();
   });
 
   it("successful upload still renders the normal SpreadsheetPreview (no error UI)", async () => {
@@ -1075,6 +1303,6 @@ describe("U. Previewer parse failure surface", () => {
 
     expect(screen.queryByTestId("previewer-error")).toBeNull();
     expect(screen.getByTestId("spreadsheet-preview")).toBeInTheDocument();
-    expect(useAppStore.getState().fileParseErrors).toEqual({});
+    expect(useAppStore.getState().previewErrors).toEqual({});
   });
 });

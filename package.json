@@ -1,4 +1,18 @@
 {
+  "name": "spreadsheet-agent",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend -c blue,magenta \"python -m uvicorn backend.app.main:app --reload --port 8000\" \"cd frontend && npx vite\"",
+    "dev:backend": "python -m uvicorn backend.app.main:app --reload --port 8000",
+    "dev:frontend": "cd frontend && npx vite",
+    "build": "cd frontend && npm run build",
+    "test": "cd frontend && npm test -- --run",
+    "test:backend": "cd backend && py -m pytest -q"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
   "dependencies": {
     "@ant-design/x": "^2.9.0"
   }

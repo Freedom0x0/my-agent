@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Callable
 import httpx
 
 from ..config import get_settings
-from ..logging_setup import log_event
+from ..logging_setup import current_request_id, log_event
 from .handlers import HANDLERS, truncate_result, validate_tool_input
 from .prompts import SYSTEM_PROMPT
 from .schemas import (
@@ -179,6 +179,7 @@ async def minimax_chat_stream(
                 blocks: dict[int, dict[str, Any]] = {}
                 stop_reason: str | None = None
                 message_id: str | None = None
+                usage: dict[str, Any] = {}
                 async for line in resp.aiter_lines():
                     if not line:
                         continue
@@ -195,6 +196,8 @@ async def minimax_chat_stream(
                     if etype == "message_start":
                         msg = evt.get("message") or {}
                         message_id = msg.get("id")
+                        # input_tokens arrives here; output_tokens lands on message_delta.
+                        usage.update(msg.get("usage") or {})
                         yield {"type": "model_meta", "message_id": message_id or ""}
                     elif etype == "content_block_start":
                         idx = evt.get("index", 0)
@@ -246,6 +249,7 @@ async def minimax_chat_stream(
                         delta = evt.get("delta") or {}
                         if "stop_reason" in delta and delta["stop_reason"]:
                             stop_reason = delta["stop_reason"]
+                        usage.update(evt.get("usage") or {})
                     elif etype == "message_stop":
                         break
                 content_blocks = [blocks[k] for k in sorted(blocks.keys())]
@@ -253,6 +257,7 @@ async def minimax_chat_stream(
                     "type": "message_done",
                     "stop_reason": stop_reason or "end_turn",
                     "content_blocks": content_blocks,
+                    "usage": usage,
                 }
     except ChatError:
         raise
@@ -288,6 +293,58 @@ def _last_output_name(session: Any) -> str | None:
     return None
 
 
+def _tool_log_line(
+    session: Any,
+    tool_call: ToolCall,
+    status: str,
+    duration_ms: int,
+    summary: str,
+) -> str:
+    """One line per tool run, carrying enough context to trace it afterwards.
+
+    The log format renders only `%(message)s`, so anything not in here is invisible
+    in the file — `session` and `file` are what let you reconstruct which
+    conversation and which sheet a slow or failing call belonged to.
+    """
+    parts = [
+        f"tool {tool_call.name} {status} {duration_ms}ms",
+        f"session={session.session_id}",
+    ]
+    file_id = tool_call.input.get("file_id")
+    if file_id:
+        parts.append(f"file={file_id}")
+    if summary:
+        text = summary if len(summary) <= 120 else summary[:117] + "..."
+        parts.append(f"| {text}")
+    return " ".join(parts)
+
+
+def _ui_append(
+    session: Any,
+    role: str,
+    content: str = "",
+    *,
+    tool_calls: list[dict[str, Any]] | None = None,
+    segments: list[dict[str, Any]] | None = None,
+) -> None:
+    """Append one UI-shaped turn to the session transcript (persisted, then replayed).
+
+    Kept separate from `session.messages` (Anthropic shape, model context): the UI
+    transcript carries the interleaved text/tool `segments` the client renders.
+    """
+    calls = list(tool_calls or [])
+    for entry in calls:
+        # A tool that never reported back would otherwise persist as `running`.
+        if entry.get("status") not in ("ok", "error"):
+            entry["status"] = "error"
+    session.ui_messages.append({
+        "role": role,
+        "content": content,
+        "tool_calls": calls,
+        "segments": list(segments or []),
+    })
+
+
 def _build_first_user_text(user_message: str, session: Session) -> str:
     if not session.files:
         return user_message
@@ -316,6 +373,7 @@ def process_chat(
     settings = settings or get_settings()
     store = store or get_session_store()
     session = store.get_or_create(session_id)
+    session.request_id = current_request_id()
     caller = chat_caller or _default_chat_caller
 
     # Register any new file paths (tables still lazy — handlers load via tablex_upload).
@@ -343,6 +401,8 @@ def process_chat(
     content_text = _build_first_user_text(user_message, session) if is_first else user_message
     session.messages.append({"role": "user", "content": content_text})
 
+    tool_log_start = len(session.tool_calls_log)
+
     with session.lock:
         for _ in range(MAX_TOOL_CALLS):
             try:
@@ -366,6 +426,12 @@ def process_chat(
                 text = _extract_text(content_blocks)
                 session.messages.append({"role": "assistant", "content": content_blocks})
                 session.touch()
+                # The UI transcript is written only once the turn reaches a terminal
+                # state, so a failed turn leaves no dangling user bubble behind.
+                # ponytail: non-stream turns get no interleaved `segments` (the UI reads
+                # `tool_calls` instead). None of the UI calls this path; wire it up if one does.
+                _ui_append(session, "user", user_message)
+                _ui_append(session, "assistant", text, tool_calls=session.tool_calls_log[tool_log_start:])
                 store.persist_messages(session)
                 return ChatResponse(
                     reply=text,
@@ -377,6 +443,13 @@ def process_chat(
 
             if stop_reason == "max_tokens":
                 session.messages.append({"role": "assistant", "content": content_blocks})
+                _ui_append(session, "user", user_message)
+                _ui_append(
+                    session,
+                    "assistant",
+                    "模型输出过长，请简化需求",
+                    tool_calls=session.tool_calls_log[tool_log_start:],
+                )
                 store.persist_messages(session)
                 return ChatResponse(
                     reply="模型输出过长，请简化需求",
@@ -417,7 +490,7 @@ def process_chat(
                             tool_duration_ms = int((time.perf_counter() - tool_started) * 1000)
                             log_event(
                                 logging.INFO if tool_status == "ok" else logging.WARNING,
-                                f"tool {tool_call.name} {tool_status} {tool_duration_ms}ms",
+                                _tool_log_line(session, tool_call, tool_status, tool_duration_ms, result.summary),
                                 request_id=getattr(session, "request_id", None),
                             )
 
@@ -469,6 +542,7 @@ def _process_chat_setup(
     settings = settings or get_settings()
     store = store or get_session_store()
     session = store.get_or_create(session_id)
+    session.request_id = current_request_id()
 
     if file_ids:
         from ..db import get_file
@@ -513,6 +587,7 @@ async def process_chat_stream(
     caller = stream_caller or _default_stream_caller or minimax_chat_stream
 
     segments: list[dict[str, Any]] = []
+    tool_log_start = len(session.tool_calls_log)
 
     async def _check_disc() -> bool:
         if is_disconnected is None:
@@ -530,6 +605,8 @@ async def process_chat_stream(
 
         content_blocks: list[dict[str, Any]] = []
         stop_reason: str | None = None
+        usage: dict[str, Any] = {}
+        round_started = time.perf_counter()
         try:
             async for evt in caller(
                 messages=session.messages,
@@ -551,12 +628,23 @@ async def process_chat_stream(
                 elif etype == "message_done":
                     stop_reason = evt.get("stop_reason")
                     content_blocks = list(evt.get("content_blocks") or [])
+                    usage = dict(evt.get("usage") or {})
             if stop_reason is None:
                 raise ChatError("model_invalid_response", "模型未返回 stop_reason")
         except ChatError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
             raise ChatError("model_error", f"模型调用失败: {exc}") from exc
+
+        round_ms = int((time.perf_counter() - round_started) * 1000)
+        log_event(
+            logging.INFO,
+            f"model round {stop_reason} {round_ms}ms blocks={len(content_blocks)}"
+            f" tokens_in={usage.get('input_tokens', '?')}"
+            f" tokens_out={usage.get('output_tokens', '?')}"
+            f" session={session.session_id}",
+            request_id=getattr(session, "request_id", None),
+        )
 
         yield {"type": "model_response", "stop_reason": stop_reason}
 
@@ -566,6 +654,14 @@ async def process_chat_stream(
                 segments.append({"type": "text", "content": text})
             session.messages.append({"role": "assistant", "content": content_blocks})
             session.touch()
+            _ui_append(session, "user", user_message)
+            _ui_append(
+                session,
+                "assistant",
+                text,
+                tool_calls=session.tool_calls_log[tool_log_start:],
+                segments=segments,
+            )
             store.persist_messages(session)
             yield {
                 "type": "done",
@@ -582,6 +678,14 @@ async def process_chat_stream(
             if text:
                 segments.append({"type": "text", "content": text})
             session.messages.append({"role": "assistant", "content": content_blocks})
+            _ui_append(session, "user", user_message)
+            _ui_append(
+                session,
+                "assistant",
+                "模型输出过长，请简化需求",
+                tool_calls=session.tool_calls_log[tool_log_start:],
+                segments=segments,
+            )
             store.persist_messages(session)
             yield {
                 "type": "error",
@@ -628,7 +732,7 @@ async def process_chat_stream(
                         tool_duration_ms = int((time.perf_counter() - tool_started) * 1000)
                         log_event(
                             logging.INFO if tool_status == "ok" else logging.WARNING,
-                            f"tool {tool_call.name} {tool_status} {tool_duration_ms}ms",
+                            _tool_log_line(session, tool_call, tool_status, tool_duration_ms, result.summary),
                             request_id=getattr(session, "request_id", None),
                         )
 
@@ -657,6 +761,7 @@ async def process_chat_stream(
                 })
                 yield {
                     "type": "tool_end",
+                    "id": tool_call.tool_use_id,
                     "name": tool_call.name,
                     "summary": result.summary,
                     "status": tool_status,

@@ -29,11 +29,18 @@ class Session:
         self.files: dict[str, dict[str, Any]] = {}  # file_id -> {path, sha256, original_name}
         self.tables: dict[str, pd.DataFrame] = {}
         self.messages: list[dict[str, Any]] = []
+        # UI-shaped transcript (role/content/tool_calls/segments) rendered by the
+        # client. Persisted to sessions.ui_messages_json so a reload rebuilds the
+        # same interleaved timeline the user saw while streaming.
+        self.ui_messages: list[dict[str, Any]] = []
         self.tool_calls_log: list[dict[str, Any]] = []
         self.audit_events: list[Any] = []
         self.output_id: str | None = None
         self.output_path: str | None = None
         self.output_dir = output_dir
+        # Set per turn from the request context so tool logs can be traced back to
+        # the request that triggered them.
+        self.request_id: str | None = None
         self.lock = threading.Lock()
         self.created_at = time.time()
         self.updated_at = self.created_at
@@ -103,7 +110,12 @@ class SessionStore:
         # Local import keeps the module light and avoids an import cycle at load.
         from ..db import save_session_messages
 
-        save_session_messages(self.db_path, session.session_id, list(session.messages))
+        save_session_messages(
+            self.db_path,
+            session.session_id,
+            list(session.messages),
+            ui_messages=list(session.ui_messages),
+        )
 
 
 # Module-level singleton; the FastAPI app wires the output_dir at startup.

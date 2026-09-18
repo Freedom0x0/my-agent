@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from contextvars import ContextVar, Token
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from threading import Lock
@@ -18,6 +19,23 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 RING_CAPACITY = 1000
 
+# Set by the request middleware, read by every log record that doesn't carry an
+# explicit `request_id`. A contextvar (not a global) so concurrent requests don't
+# overwrite each other's id.
+_request_id: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+def set_request_id(value: str) -> Token[str]:
+    return _request_id.set(value)
+
+
+def reset_request_id(token: Token[str]) -> None:
+    _request_id.reset(token)
+
+
+def current_request_id() -> str:
+    return _request_id.get()
+
 
 class RingBufferHandler(logging.Handler):
     """Thread-safe bounded deque of formatted log lines."""
@@ -26,6 +44,11 @@ class RingBufferHandler(logging.Handler):
         super().__init__()
         self._buffer: deque[str] = deque(maxlen=capacity)
         self._lock = Lock()
+        # Owned here rather than attached by setup_logging: every line this handler
+        # formats still needs `request_id`, and a record without one raises inside
+        # format() — which handleError swallows, so the line vanishes from the log
+        # panel. Keeping the filter intrinsic means that can't be misconfigured.
+        self.addFilter(_RequestIdFilter())
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -71,11 +94,15 @@ def reset_ring() -> None:
 
 
 class _RequestIdFilter(logging.Filter):
-    """Inject `request_id='-'` so the format string never KeyErrors."""
+    """Fill in `request_id` so the format string never KeyErrors.
+
+    Records emitted through `log_event` already carry one; everything else
+    (`logger.exception`, third-party loggers) falls back to the id of the request
+    being served, or `-` outside a request.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not getattr(record, "request_id", None):
-            record.request_id = "-"
+        record.request_id = getattr(record, "request_id", None) or current_request_id()
         return True
 
 

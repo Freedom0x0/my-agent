@@ -22,15 +22,14 @@ export function Previewer() {
   const activeTabBySession = useAppStore((s) => s.activeTabBySession);
   const filePreviews = useAppStore((s) => s.filePreviews);
   const outputPreviews = useAppStore((s) => s.outputPreviews);
-  const previewError = useAppStore((s) => s.previewError);
   const status = useAppStore((s) => s.status);
   const removeFile = useAppStore((s) => s.removeFile);
   const removeTab = useAppStore((s) => s.removeTab);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const uploadFile = useAppStore((s) => s.uploadFile);
   const addEmptyTab = useAppStore((s) => s.addEmptyTab);
-  const clearFileParseError = useAppStore((s) => s.clearFileParseError);
-  const fileParseErrors = useAppStore((s) => s.fileParseErrors);
+  const ensurePreview = useAppStore((s) => s.ensurePreview);
+  const previewErrors = useAppStore((s) => s.previewErrors);
 
   const tabs = currentSessionId ? tabsBySession[currentSessionId] ?? [] : [];
   const activeTabId = currentSessionId ? activeTabBySession[currentSessionId] ?? "" : "";
@@ -55,11 +54,32 @@ export function Previewer() {
   }, [activePreview]);
 
   const downloadHref = useMemo(() => {
-    if (activeTab?.kind === "output") return api.downloadUrl(activeTab.refId);
+    if (activeTab?.kind === "output" && activeTab.refId) return api.downloadUrl(activeTab.refId);
     return null;
   }, [activeTab]);
 
   const activeTabIsEmpty = activeTab?.kind === "file" && activeTab.refId === "";
+
+  // The preview caches are memory-only, but tabs are persisted — so on a reload or a
+  // session switch a restored tab arrives with no preview and nothing to fetch it.
+  // This is that fetch; it's a no-op when the preview is already cached.
+  //
+  // A tab that already failed is left alone: re-fetching the same bytes with the same
+  // parser just fails again, and it would stamp over the real error message. Retrying
+  // is the button's job.
+  useEffect(() => {
+    if (!activeTab || activeTabIsEmpty) return;
+    if (previewErrors[activeTab.refId]) return;
+    void ensurePreview(activeTab.kind, activeTab.refId, { name: activeTab.fileName });
+  }, [activeTab, activeTabIsEmpty, ensurePreview, previewErrors]);
+
+  // An output tab whose id could never be resolved (e.g. a legacy session that
+// predates tool segments) has nothing to fetch — say so instead of spinning.
+  const activeError =
+    (activeTab ? previewErrors[activeTab.refId] : undefined) ??
+    (activeTab && activeTab.kind === "output" && !activeTab.refId
+      ? "该结果文件已失效，请重新生成"
+      : undefined);
 
   const emptyDropzone = (
     <div className="empty-state previewer-empty" data-testid="previewer-empty-dropzone">
@@ -147,7 +167,6 @@ export function Previewer() {
       </div>
 
       <div className="previewer-body">
-        {previewError && <div className="previewer-warning">{previewError}</div>}
         {tabs.length === 0 && (
           <div className="empty-state previewer-empty">
             <p className="empty-title">暂无打开的文件</p>
@@ -177,21 +196,27 @@ export function Previewer() {
             }
           />
         )}
-        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && activeTab?.kind === "file" && fileParseErrors[activeTab.refId] && (
+        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && activeError && (
           <div className="empty-state previewer-error" data-testid="previewer-error">
             <p className="empty-title">解析失败</p>
-            <p className="empty-sub">{fileParseErrors[activeTab.refId]}</p>
+            <p className="empty-sub">{activeError}</p>
             <button
               type="button"
               className="empty-action-btn"
               data-testid="previewer-error-retry"
-              onClick={() => activeTab && clearFileParseError(activeTab.refId)}
+              onClick={() => {
+                if (!activeTab) return;
+                void ensurePreview(activeTab.kind, activeTab.refId, {
+                  force: true,
+                  name: activeTab.fileName,
+                });
+              }}
             >
               重试
             </button>
           </div>
         )}
-        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && !(activeTab?.kind === "file" && fileParseErrors[activeTab.refId]) && (
+        {tabs.length > 0 && !activePreview && !activeTabIsEmpty && !activeError && (
           <div className="empty-state previewer-empty">
             <p className="empty-title">{activeTab?.fileName ?? "加载中"}</p>
             <p className="empty-sub">正在解析该文件…</p>

@@ -2,6 +2,7 @@ import type {
   ChatMessage,
   ColumnSummary,
   FileItem,
+  Segment,
   SheetSummary,
   ToolCallResult,
   UserFacingError,
@@ -129,6 +130,17 @@ export function mapSessionMessages(
       role: m.role,
       content: extractText(m.content),
       toolCalls: m.tool_calls?.map(mapToolCall),
+      // The interleaved timeline the user watched stream in, replayed verbatim so a
+      // reload doesn't reflow the bubble into a different shape.
+      segments: m.segments?.map((seg): Segment =>
+        seg.type === "text"
+          ? { type: "text", content: seg.content }
+          : {
+              type: "tool",
+              call: mapToolCall(seg.call),
+              outputName: seg.output_name ?? null,
+            },
+      ),
       outputId: outId,
       outputName: outName,
       sheets: [],

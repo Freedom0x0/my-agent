@@ -566,7 +566,8 @@ def test_handle_export_requires_output_name(session: Session) -> None:
     assert "output_name" in (res.error or "")
 
 
-def test_handle_export_data_has_no_output_id(session: Session, tmp_path: Path) -> None:
+def test_handle_export_data_carries_output_id(session: Session, tmp_path: Path) -> None:
+    """The client reopens the result by id — without it the tab can never load."""
     session.output_dir = tmp_path / "outputs"
     session.output_dir.mkdir(parents=True, exist_ok=True)
     res = handle_export(
@@ -575,8 +576,9 @@ def test_handle_export_data_has_no_output_id(session: Session, tmp_path: Path) -
     )
     assert res.success
     assert res.data is not None
-    assert "output_id" not in res.data
     assert res.data["output_name"] == "result"
+    assert res.data["output_id"] == session.output_id
+    assert (tmp_path / "outputs" / f"{res.data['output_id']}.xlsx").exists()
 
 
 def test_validate_export_requires_output_name(session: Session) -> None:
@@ -645,3 +647,25 @@ def test_truncate_result_drops_data_when_too_big() -> None:
     out = truncate_result(r, 200)
     assert "summary" in out
     assert "y" * 100 not in out
+
+# ---------- output_id contract ----------
+
+
+def test_every_output_writing_handler_reports_its_output_id() -> None:
+    """Lint-style guard for a bug that shipped twice already.
+
+    A handler that persists an output file must hand `output_id` back in its result
+    `data`, or the client has no way to reopen the file it just produced (the tab
+    spins forever, or never appears). Three handlers once dropped it — two of them
+    with a test asserting the absence — so this checks the whole directory instead
+    of trusting the next author to remember.
+    """
+    handlers_dir = Path(__file__).resolve().parents[1] / "app" / "mcp" / "handlers"
+    offenders: list[str] = []
+    for module in sorted(handlers_dir.glob("*.py")):
+        source = module.read_text(encoding="utf-8")
+        if "insert_output(" in source and '"output_id": output_id' not in source:
+            offenders.append(module.name)
+    assert not offenders, (
+        "these handlers write an output but never report its id: " + ", ".join(offenders)
+    )

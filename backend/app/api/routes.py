@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from ..config import get_settings
@@ -24,6 +24,7 @@ from ..db import (
     insert_output,
     list_sessions,
 )
+from ..logging_setup import get_ring
 from ..domain._archive.operations import (
     ConfirmationRequired,
     InvalidPlanError,
@@ -108,7 +109,10 @@ def create_router() -> APIRouter:
             413: {"model": ErrorResponse},
         },
     )
-    async def upload_file(file: UploadFile = File(...)) -> FileUploadResponse:
+    async def upload_file(
+        file: UploadFile = File(...),
+        session_id: str | None = Form(default=None),
+    ) -> FileUploadResponse:
         if not file.filename:
             raise _build_error("invalid_request", "缺少文件名", 400)
         ext = _file_extension(file.filename)
@@ -153,6 +157,7 @@ def create_router() -> APIRouter:
             sha256=sha,
             inspection=inspection.model_dump(),
             created_at=_dt.datetime.utcnow().isoformat(),
+            session_id=(session_id or "").strip() or None,
         )
         insert_file(_db_path(), record)
         return FileUploadResponse(
@@ -161,6 +166,24 @@ def create_router() -> APIRouter:
             size_bytes=len(contents),
             inspection=inspection,
         )
+
+    @router.get(
+        "/files/{file_id}/content",
+        responses={404: {"model": ErrorResponse}},
+    )
+    async def download_file_content(file_id: str):
+        """Hand back the original bytes so the client can rebuild a preview.
+
+        Previews are parsed client-side from the real workbook; without this the
+        client has no way back to the bytes after a reload.
+        """
+        rec = get_file(_db_path(), file_id)
+        if rec is None:
+            raise _build_error("file_not_found", f"未找到文件 {file_id}", 404)
+        path = _verify_within(_uploads_dir(), Path(rec.stored_path))
+        if not path.exists():
+            raise _build_error("file_not_found", "文件已丢失", 404)
+        return FileResponse(path=str(path), filename=rec.original_name)
 
     @router.post(
         "/plans",
@@ -292,6 +315,18 @@ def create_router() -> APIRouter:
         events = rec.result.get("audit_events", [])
         conclusions = rec.result.get("conclusions", [])
         return AuditResponse(output_id=output_id, events=events, conclusions=conclusions)
+
+    @router.get("/logs/recent")
+    async def logs_recent(
+        lines: int = Query(default=200, ge=1, le=1000),
+    ) -> dict[str, Any]:
+        """Tail of the in-process log ring — what the log panel polls.
+
+        Read from the ring buffer rather than the file so it works without a
+        writable log directory, and so it can't be swamped by rotation.
+        """
+        snapshot = get_ring().snapshot()
+        return {"total_lines": len(snapshot), "lines": snapshot[-lines:]}
 
     @router.get("/sessions")
     async def list_sessions_route() -> dict[str, Any]:

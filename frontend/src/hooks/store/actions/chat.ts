@@ -1,8 +1,7 @@
-import { ApiError, api, chatStream, readSseStream } from "../../../api/httpClient";
-import type { StreamEvent, StreamToolCall } from "../../../api/httpClient";
+import { ApiError, chatStream, readSseStream } from "../../../api/httpClient";
+import type { StreamEvent } from "../../../api/httpClient";
 import { makeUserFacingError } from "../../../api/mappers";
-import { parseWorkbook } from "../../useSpreadsheet";
-import type { ChatMessage, Segment } from "../../../domain/workflow";
+import type { ChatMessage } from "../../../domain/workflow";
 import { newMessageId } from "../types";
 import type { Actions, WorkflowState } from "../types";
 
@@ -28,111 +27,53 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
         timestamp: Date.now(),
       };
       const fileIds = s.files.map((f) => f.id);
-      const streamingId = newMessageId();
+      const assistantId = newMessageId();
       const controller = new AbortController();
+
+      // The assistant message is committed up front with `streaming: true`. Every
+      // event below appends to its `segments`, and the turn ends by just clearing
+      // that flag — so what the user watches stream in IS the final message.
+      const assistantMsg: ChatMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        segments: [],
+        streaming: true,
+        timestamp: Date.now(),
+      };
 
       set({
         status: "processing",
-        messages: [...s.messages, userMsg],
-        streamingContent: "",
-        streamingMessageId: streamingId,
+        messages: [...s.messages, userMsg, assistantMsg],
+        streamingMessageId: assistantId,
         streamController: controller,
-        lastChatToolCalls: [],
         error: null,
       });
 
-      const accumulatedReply: { value: string } = { value: "" };
-      const toolCallsBox: { value: StreamToolCall[] } = { value: [] };
-      const doneBox: {
-        value: {
-          reply: string;
-          tool_calls: StreamToolCall[];
-          output_id: string | null;
-          output_name: string | null;
-          sheets: string[];
-          segments?: Segment[];
-        } | null;
-      } = { value: null };
       const errorBox: { value: { code: string; message: string } | null } = { value: null };
-      const lastOutputName: { value: string | null } = { value: null };
+      const doneBox: { value: Extract<StreamEvent, { type: "done" }> | null } = { value: null };
+      const outputBox: { value: { id: string | null; name: string | null } } = { value: { id: null, name: null } };
+      // Tracks whether the current text run still accepts deltas. A new model round
+      // (`model_call`) closes it so each round lands as its own segment, matching
+      // the server-built transcript that gets persisted.
+      let textRunOpen = false;
+      // Whether any text actually arrived as deltas — if not, `done.reply` is the
+      // only copy of the answer we have.
+      let sawText = false;
 
-      const finish = (status: "completed" | "error", error?: { code: string; message: string }) => {
-        if (status === "completed" && doneBox.value) {
-          const doneEvent = doneBox.value;
-          const assistantId = newMessageId();
-          const finalOutputName = doneEvent.output_name ?? lastOutputName.value;
-          const assistantMsg: ChatMessage = {
-            id: assistantId,
-            role: "assistant",
-            content: accumulatedReply.value || doneEvent.reply,
-            toolCalls: toolCallsBox.value.map((t) => ({
-              tool: t.tool,
-              status: t.status,
-              summary: t.summary,
-              outputId: t.output_id ?? null,
-              outputName: t.output_name ?? null,
-            })),
-            segments: doneEvent.segments,
-            outputId: doneEvent.output_id ?? null,
-            outputName: finalOutputName,
-            sheets: doneEvent.sheets ?? [],
-            timestamp: Date.now(),
-          };
-          const outputId = doneEvent.output_id ?? null;
-          const sheets = doneEvent.sheets ?? [];
-          set((cur) => ({
-            status: "completed",
-            messages: [...cur.messages, assistantMsg],
-            streamingContent: "",
-            streamingMessageId: null,
-            streamController: null,
-            outputIds: outputId && !cur.outputIds.includes(outputId)
-              ? [...cur.outputIds, outputId]
-              : cur.outputIds,
-            lastChatSheets: sheets,
-            lastChatOutputId: outputId,
-            lastChatOutputName: finalOutputName,
-            lastChatToolCalls: toolCallsBox.value.map((t) => ({
-              tool: t.tool,
-              status: t.status,
-              summary: t.summary,
-              outputId: t.output_id ?? null,
-              outputName: t.output_name ?? null,
-            })),
-          }));
-
-          if (outputId && finalOutputName) {
-            get().addTab(sessionId, {
-              kind: "output",
-              refId: outputId,
-              fileName: finalOutputName,
-              outputName: finalOutputName,
-            });
-            (async () => {
-              try {
-                const buffer = await api.download(outputId);
-                const preview = parseWorkbook(buffer, `${finalOutputName}.xlsx`);
-                set((cur) => ({
-                  outputPreviews: { ...cur.outputPreviews, [outputId]: preview },
-                }));
-              } catch {
-                set({ previewError: "结果文件解析失败，请点击下方按钮下载查看" });
-              }
-            })();
-          }
-
-          void get().loadSessions();
-        } else {
-          const code = error?.code ?? "network_error";
-          const message = error?.message ?? "请求失败";
-          set({
-            status: "error",
-            error: makeUserFacingError(code, message),
-            streamingContent: "",
-            streamingMessageId: null,
-            streamController: null,
-          });
-        }
+      const rememberOutput = (id: string | null | undefined, name: string | null | undefined) => {
+        if (!name) return;
+        if (outputBox.value.name === name && outputBox.value.id === (id ?? null)) return;
+        outputBox.value = { id: id ?? null, name };
+        // No id means no bytes to preview — a tab here would spin forever. The
+        // chat bubble's chip can still open it once the id is known.
+        if (!id) return;
+        get().addTab(sessionId, {
+          kind: "output",
+          fileName: name,
+          outputName: name,
+          refId: id,
+        });
       };
 
       try {
@@ -143,78 +84,30 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
 
         await readSseStream(reader, (evt: StreamEvent) => {
           switch (evt.type) {
+            case "model_call":
+              textRunOpen = false;
+              break;
             case "text":
-              accumulatedReply.value += evt.delta;
-              get().appendStream(evt.delta);
+              get().appendTextDelta(evt.delta, { separate: !textRunOpen });
+              textRunOpen = true;
+              sawText = true;
               break;
             case "tool_start":
-              toolCallsBox.value.push({ tool: evt.name, status: "ok", summary: "(运行中)" });
+              get().pushToolStart(evt.id, evt.name);
               break;
-            case "tool_end": {
-              const list = toolCallsBox.value;
-              const last = list[list.length - 1];
-              if (last && last.tool === evt.name) {
-                last.status = evt.status as "ok" | "error";
-                last.summary = evt.summary;
-                last.output_id = evt.output_id ?? null;
-                last.output_name = evt.output_name ?? null;
-              } else {
-                list.push({
-                  tool: evt.name,
-                  status: evt.status as "ok" | "error",
-                  summary: evt.summary,
-                  output_id: evt.output_id ?? null,
-                  output_name: evt.output_name ?? null,
-                });
-              }
-              if (evt.output_name) {
-                lastOutputName.value = evt.output_name;
-                const outputId = evt.output_id ?? "";
-                get().addTab(sessionId, {
-                  kind: "output",
-                  fileName: evt.output_name,
-                  outputName: evt.output_name,
-                  refId: outputId,
-                });
-                if (outputId) {
-                  (async () => {
-                    try {
-                      const buffer = await api.download(outputId);
-                      const preview = parseWorkbook(buffer, `${evt.output_name}.xlsx`);
-                      set((cur) => ({
-                        outputPreviews: { ...cur.outputPreviews, [outputId]: preview },
-                      }));
-                    } catch {
-                      /* ignore — UI shows error state if download fails */
-                    }
-                  })();
-                }
-              }
+            case "tool_end":
+              get().resolveTool({
+                id: evt.id,
+                name: evt.name,
+                status: evt.status === "error" ? "error" : "ok",
+                summary: evt.summary,
+                outputId: evt.output_id,
+                outputName: evt.output_name,
+              });
+              rememberOutput(evt.output_id, evt.output_name);
               break;
-            }
             case "done":
-              doneBox.value = {
-                reply: evt.reply,
-                tool_calls: evt.tool_calls,
-                output_id: evt.output_id ?? null,
-                output_name: evt.output_name ?? null,
-                sheets: evt.sheets,
-                segments: evt.segments?.map((s): Segment =>
-                  s.type === "text"
-                    ? { type: "text", content: s.content }
-                    : {
-                        type: "tool",
-                        call: {
-                          tool: s.call.tool,
-                          status: s.call.status,
-                          summary: s.call.summary,
-                          outputId: s.call.output_id ?? null,
-                          outputName: s.output_name ?? null,
-                        },
-                        outputName: s.output_name ?? null,
-                      },
-                ),
-              };
+              doneBox.value = evt;
               break;
             case "error":
               errorBox.value = { code: evt.code, message: evt.message };
@@ -224,30 +117,84 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
           }
         });
 
-        if (errorBox.value && !doneBox.value) {
-          finish("error", errorBox.value);
-        } else {
-          finish("completed");
+        // An abort can surface as a clean end-of-stream rather than a thrown
+        // AbortError — either way it's a stop, not a failure.
+        if (controller.signal.aborted) {
+          get().endStreamMessage();
+          set({ status: "idle" });
+          return;
         }
+
+        if (errorBox.value && !doneBox.value) {
+          const friendly = makeUserFacingError(errorBox.value.code, errorBox.value.message);
+          get().appendTextDelta(friendly.message, { separate: true });
+          get().endStreamMessage();
+          set({ status: "error", error: friendly });
+          return;
+        }
+
+        if (!doneBox.value) {
+          // The stream closed without a terminal event — don't call that a success.
+          const friendly = makeUserFacingError("network_error", "连接中断");
+          get().appendTextDelta(friendly.message, { separate: true });
+          get().endStreamMessage();
+          set({ status: "error", error: friendly });
+          return;
+        }
+
+        // Insurance: if the model produced text that never arrived as deltas, keep it.
+        const done = doneBox.value;
+        if (done?.reply && !sawText) {
+          get().appendTextDelta(done.reply, { separate: true });
+        }
+        // `done` also carries the last output — normally already remembered from
+        // tool_end, but keep the fallback so the contract holds either way.
+        rememberOutput(done?.output_id, done?.output_name);
+
+        const sheets = done?.sheets ?? [];
+        const finalOutputName = outputBox.value.name;
+        const finalOutputId = outputBox.value.id;
+        get().endStreamMessage({
+          outputId: finalOutputId,
+          outputName: finalOutputName,
+          sheets,
+        });
+        if (finalOutputId) {
+          set((cur) => ({
+            outputIds: cur.outputIds.includes(finalOutputId)
+              ? cur.outputIds
+              : [...cur.outputIds, finalOutputId],
+          }));
+        }
+        set({
+          status: "completed",
+          lastChatSheets: sheets,
+          lastChatOutputId: finalOutputId,
+          lastChatOutputName: finalOutputName,
+        });
+
+        void get().loadSessions();
       } catch (err) {
         if ((err as { name?: string }).name === "AbortError") {
-          set({
-            status: "idle",
-            streamingContent: "",
-            streamingMessageId: null,
-            streamController: null,
-          });
+          get().endStreamMessage();
+          set({ status: "idle" });
           return;
         }
         if (errorBox.value) {
-          finish("error", errorBox.value);
+          const friendly = makeUserFacingError(errorBox.value.code, errorBox.value.message);
+          get().appendTextDelta(friendly.message, { separate: true });
+          get().endStreamMessage();
+          set({ status: "error", error: friendly });
           return;
         }
         const apiErr =
           err instanceof ApiError
             ? err
             : new ApiError({ status: 0, errorCode: "network_error", message: "请求失败" });
-        finish("error", { code: apiErr.errorCode, message: apiErr.message });
+        const friendly = makeUserFacingError(apiErr.errorCode, apiErr.message);
+        get().appendTextDelta(friendly.message, { separate: true });
+        get().endStreamMessage();
+        set({ status: "error", error: friendly });
       }
     },
 

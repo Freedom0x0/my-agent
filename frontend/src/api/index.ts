@@ -1,5 +1,5 @@
 import { chat, chatStream } from "./chat";
-import { download, downloadUrl, uploadFile } from "./files";
+import { download, downloadUploadedFile, downloadUrl, uploadFile } from "./files";
 import { getSession, listSessions } from "./sessions";
 
 export type { StreamEvent, StreamToolCall } from "./chat";
@@ -13,4 +13,5 @@ export const api = {
   getSession,
   downloadUrl,
   download,
+  downloadUploadedFile,
 };

@@ -8,7 +8,6 @@ import type {
   WorkbookPreview,
   AppStatus,
 } from "../../domain/workflow";
-import type { ToolCallResult } from "../../domain/models";
 import {
   DEFAULT_SIDER_WIDTH,
   DEFAULT_PREVIEW_WIDTH,
@@ -35,15 +34,11 @@ export type WorkflowState = {
   activePreview: PreviewTarget | null;
   filePreviews: Record<string, WorkbookPreview>;
   outputPreviews: Record<string, WorkbookPreview>;
-  previewLoading: boolean;
-  previewError: string | null;
-  fileParseErrors: Record<string, string>;
+  previewErrors: Record<string, string>;
   tabsBySession: Record<string, Tab[]>;
   activeTabBySession: Record<string, string>;
-  streamingContent: string;
   streamingMessageId: string | null;
   streamController: AbortController | null;
-  lastChatToolCalls: ToolCallResult[];
   lastChatSheets: string[];
   lastChatOutputId: string | null;
   lastChatOutputName: string | null;
@@ -71,15 +66,11 @@ export const initial: WorkflowState = {
   activePreview: null,
   filePreviews: {},
   outputPreviews: {},
-  previewLoading: false,
-  previewError: null,
-  fileParseErrors: {},
+  previewErrors: {},
   tabsBySession: {},
   activeTabBySession: {},
-  streamingContent: "",
   streamingMessageId: null,
   streamController: null,
-  lastChatToolCalls: [],
   lastChatSheets: [],
   lastChatOutputId: null,
   lastChatOutputName: null,

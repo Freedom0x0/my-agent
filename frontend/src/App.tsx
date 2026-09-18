@@ -1,30 +1,25 @@
 import { useEffect, useState } from "react";
 import {
-  Bubble,
   Prompts,
   Sender,
   Welcome,
   XProvider,
 } from "@ant-design/x";
-import type { BubbleItemType } from "@ant-design/x/es/bubble";
 import {
   BarChartOutlined,
   ClearOutlined,
   FileSearchOutlined,
   MergeCellsOutlined,
-  RobotOutlined,
   StopOutlined,
-  UserOutlined,
   VerticalLeftOutlined,
   VerticalRightOutlined,
 } from "@ant-design/icons";
 
+import { ChatList } from "./components/chat/ChatList";
 import { ChatScroll } from "./components/chat/ChatScroll";
 import { Previewer } from "./components/Previewer";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SenderPopover } from "./components/SenderPopover";
-import { AssistantBubble } from "./components/bubble/AssistantBubble";
-import { UserBubble } from "./components/bubble/UserBubble";
 import { useAppStore, bootstrapApp } from "./hooks/useAppStore";
 
 const theme = {
@@ -44,14 +39,6 @@ const theme = {
   components: { Bubble: { borderRadius: 12 } },
 };
 
-const userAvatar = <UserOutlined />;
-const agentAvatar = <RobotOutlined />;
-
-const BUBBLE_ROLE = {
-  user: { placement: "end" as const, variant: "filled" as const, shape: "round" as const, avatar: userAvatar },
-  assistant: { placement: "start" as const, variant: "outlined" as const, shape: "round" as const, avatar: agentAvatar },
-};
-
 const PROMPTS = [
   { key: "inspect", icon: <FileSearchOutlined />, label: "检查数据问题", description: "扫描空值、重复、类型异常" },
   { key: "normalize", icon: <ClearOutlined />, label: "统一格式并去重", description: "金额/日期字段统一，移除重复行" },
@@ -61,7 +48,9 @@ const PROMPTS = [
 
 export function App() {
   const status = useAppStore((s) => s.status);
-  const messages = useAppStore((s) => s.messages);
+  // Only the count — the list itself is owned by ChatList so streaming tokens
+  // don't re-render the whole shell.
+  const messageCount = useAppStore((s) => s.messages.length);
   const files = useAppStore((s) => s.files);
   const panel = useAppStore((s) => s.panel);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -70,9 +59,6 @@ export function App() {
   const error = useAppStore((s) => s.error);
   const setPanelWidth = useAppStore((s) => s.setPanelWidth);
   const togglePanel = useAppStore((s) => s.togglePanel);
-  const streamingContent = useAppStore((s) => s.streamingContent);
-  const streamingMessageId = useAppStore((s) => s.streamingMessageId);
-  const lastChatToolCalls = useAppStore((s) => s.lastChatToolCalls);
 
   const isProcessing = status === "processing";
   const hasFiles = files.length > 0;
@@ -80,41 +66,6 @@ export function App() {
   const [input, setInput] = useState("");
 
   useEffect(() => { void bootstrapApp(); }, []);
-
-  const bubbleItems: BubbleItemType[] = [];
-  messages.forEach((m) => {
-    if (m.role === "user") {
-      bubbleItems.push({
-        key: m.id,
-        role: "user",
-        content: <UserBubble message={m} />,
-      });
-      return;
-    }
-    bubbleItems.push({
-      key: m.id,
-      role: "assistant",
-      content: <AssistantBubble message={m} />,
-    });
-  });
-  if (streamingMessageId && (streamingContent || (lastChatToolCalls.length > 0))) {
-    bubbleItems.push({
-      key: streamingMessageId,
-      role: "assistant",
-      content: (
-        <AssistantBubble
-          isStreaming
-          message={{
-            id: streamingMessageId,
-            role: "assistant",
-            content: streamingContent,
-            toolCalls: lastChatToolCalls,
-            timestamp: Date.now(),
-          }}
-        />
-      ),
-    });
-  }
 
   const submit = (text: string) => {
     const trimmed = text.trim();
@@ -129,7 +80,7 @@ export function App() {
 
   const handleCommand = (cmd: string) => {
     if (cmd === "/clear") {
-      useAppStore.setState({ messages: [], streamingContent: "" });
+      useAppStore.setState({ messages: [] });
       setInput("");
     } else if (cmd === "/new") {
       useAppStore.getState().createSession();
@@ -197,7 +148,7 @@ export function App() {
               </div>
             )}
             <ChatScroll testId="chat-history">
-              {messages.length === 0 ? (
+              {messageCount === 0 ? (
                 <div className="chat-empty">
                   <Welcome icon={
                     <svg viewBox="0 0 64 64" width="64" height="64" fill="none">
@@ -213,7 +164,7 @@ export function App() {
                   {hasFiles && <Prompts items={PROMPTS} onItemClick={(info) => { const p = PROMPTS.find((x) => x.key === info.data.key); if (p) { setInput(p.label); submit(p.label); } }} />}
                 </div>
               ) : (
-                <Bubble.List role={BUBBLE_ROLE} items={bubbleItems} autoScroll />
+                <ChatList />
               )}
             </ChatScroll>
             <div className="chat-input-wrap">

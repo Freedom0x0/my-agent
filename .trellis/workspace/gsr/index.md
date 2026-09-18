@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 10
 - **Last Active**: 2026-09-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~199 | Active |
+| `journal-1.md` | ~243 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-09-17 | inline-tool-in-bubble: tool 在 bubble 内 inline + 字体颜色区分 | `072a0e5` | `master` |
+| 9 | 2026-09-17 | simplify-timeline: 移除 emoji + 降级样式 | `cadf206` | `master` |
 | 8 | 2026-09-17 | fix-preview-parse-stuck: parse 失败不再静默 | `4f52324` | `master` |
 | 7 | 2026-09-17 | flat-message-timeline: 工具调用扁平化 + 折叠 | `c43a817` | `master` |
 | 6 | 2026-09-17 | output-business-friendly: output_name + SheetLinkChip + split_by_column | `2be1b3b` | `master` |

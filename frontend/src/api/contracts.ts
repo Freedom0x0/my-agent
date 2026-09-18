@@ -51,19 +51,6 @@ export const messageDtoSchema = z.object({
     .optional(),
 });
 
-export const sessionDetailSchema = z.object({
-  session_id: z.string(),
-  title: z.string(),
-  updated_at: z.string(),
-  message_count: z.number(),
-  last_user_msg: z.string(),
-  messages: z.array(messageDtoSchema),
-  output_ids: z.array(z.string()),
-  has_more: z.boolean().optional(),
-  oldest_index: z.number().optional(),
-  total_messages: z.number().optional(),
-});
-
 export const chatRequestSchema = z.object({
   message: z.string().min(1).max(4000),
   file_ids: z.array(z.string()),
@@ -120,6 +107,22 @@ export const fileUploadResponseSchema = z.object({
   filename: z.string(),
   size_bytes: z.number(),
   inspection: workbookInspectionDtoSchema,
+});
+
+// Declared after its dependencies — zod schemas are consts, so ordering matters.
+export const sessionDetailSchema = z.object({
+  session_id: z.string(),
+  title: z.string(),
+  updated_at: z.string(),
+  message_count: z.number(),
+  last_user_msg: z.string(),
+  messages: z.array(messageDtoSchema),
+  output_ids: z.array(z.string()),
+  // Files uploaded in this session — same shape as the upload response on purpose.
+  files: z.array(fileUploadResponseSchema).optional(),
+  has_more: z.boolean().optional(),
+  oldest_index: z.number().optional(),
+  total_messages: z.number().optional(),
 });
 
 export type FileUploadResponse = z.infer<typeof fileUploadResponseSchema>;

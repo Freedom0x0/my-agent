@@ -197,3 +197,47 @@ uploadFile catch 块静默吞 parseWorkbook 错误 → previewer 永远显示"�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: simplify-timeline: 移除 emoji + 降级样式
+<!-- trellis-session: v=2 fp=4e9f66d56de87ccb -->
+
+**Date**: 2026-09-17
+**Task**: simplify-timeline: 移除 emoji + 降级样式
+**Branch**: `master`
+
+### Summary
+
+ToolCallItem 删 ✅ ❌ 🔧 emoji 改成纯文字状态标签 (成功/失败/运行中); 去掉卡片边框/阴影/独立 padding; 改用缩进 (24px) + 浅灰背景 (#f5f3eb) + monospace tool 名; 折叠展开后用左侧 border-left + 灰色文字指示。保持 SheetLinkChip + 折叠行为。TS 0 错误, 41/41 测试通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cadf206` | style(frontend): 时间线 ToolCallItem 移除 emoji + 视觉降级 |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 10: inline-tool-in-bubble: tool 在 bubble 内 inline + 字体颜色区分
+<!-- trellis-session: v=2 fp=685645496235a9a8 -->
+
+**Date**: 2026-09-17
+**Task**: inline-tool-in-bubble: tool 在 bubble 内 inline + 字体颜色区分
+**Branch**: `master`
+
+### Summary
+
+后端: agent.py process_chat_stream 累积 segments 数组 (text + tool 按模型实际顺序); SSE done event payload 加 segments; test_chat_stream 加 2 测试。前端: Segment 类型 + ChatMessage.segments?; AssistantBubble 渲染 segments 内联 (markdown + ToolInline), 老消息 fallback content + toolCalls; 新 ToolInline 组件 (inline span, 无背景无 border 无 emoji 无 status tag, 字体颜色区分); App.tsx bubbleItems 不再独立 push ToolCallItem; store done 解析 segments; 删除 ToolCallItem.tsx; CSS .tool-inline 替代 .tool-call-*。42/42 前端 + 60 后端, TS 0 错误, build 成功。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `072a0e5` | feat: 时间线内联化 — tool 在 bubble 内 inline，按模型顺序，字体颜色区分 |
+
+### Status
+
+[OK] **Completed**

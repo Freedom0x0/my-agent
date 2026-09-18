@@ -50,10 +50,15 @@ export type WorkbookPreview = {
   sheets: PreviewSheet[];
 };
 
+/** `running` only ever exists on the client — a persisted tool call is always ok/error. */
+export type ToolStatus = "running" | "ok" | "error";
+
 export type ToolCallResult = {
   tool: string;
-  status: "ok" | "error";
+  status: ToolStatus;
   summary: string;
+  /** tool_use id from the model — how `tool_end` finds its `tool_start`. */
+  id?: string;
   outputId?: string | null;
   outputName?: string | null;
 };
@@ -68,6 +73,8 @@ export type ChatMessage = {
   content: string;
   toolCalls?: ToolCallResult[];
   segments?: Segment[];
+  /** True while this message is still being streamed; cleared when the turn ends. */
+  streaming?: boolean;
   outputId?: string | null;
   outputName?: string | null;
   sheets?: string[];

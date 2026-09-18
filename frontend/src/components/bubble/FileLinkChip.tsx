@@ -8,15 +8,30 @@ type Props = {
 export function FileLinkChip({ fileId }: Props) {
   const sessionId = useAppStore((s) => s.currentSessionId);
   const tabs = useAppStore((s) => (sessionId ? s.tabsBySession[sessionId] ?? [] : []));
+  const file = useAppStore((s) => s.files.find((f) => f.id === fileId));
   const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const addTab = useAppStore((s) => s.addTab);
 
   const tab = tabs.find((t) => t.kind === "file" && t.refId === fileId);
-  const label = tab?.fileName ?? `${fileId.slice(0, 8)}…`;
-  const disabled = !tab || !sessionId;
+  const label = tab?.fileName ?? file?.name ?? `${fileId.slice(0, 8)}…`;
+  // Only a file this session doesn't know about is truly unopenable.
+  const disabled = !sessionId || (!tab && !file);
 
   const handleClick = () => {
-    if (!sessionId || !tab) return;
-    setActiveTab(sessionId, tab.id);
+    if (!sessionId) return;
+    if (tab) {
+      setActiveTab(sessionId, tab.id);
+      return;
+    }
+    // The tab was closed, or this browser never had one — the file still belongs to
+    // the session, so reopen it rather than leaving a dead chip behind.
+    if (!file) return;
+    const newId = addTab(sessionId, {
+      kind: "file",
+      refId: fileId,
+      fileName: file.name,
+    });
+    setActiveTab(sessionId, newId);
   };
 
   return (

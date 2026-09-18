@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS files (
   size_bytes INTEGER NOT NULL,
   sha256 TEXT NOT NULL,
   inspection_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  session_id TEXT
 );
 CREATE TABLE IF NOT EXISTS outputs (
   id TEXT PRIMARY KEY,
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS outputs (
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
   messages_json TEXT NOT NULL,
+  ui_messages_json TEXT,
   updated_at TEXT NOT NULL
 );
 """
@@ -48,6 +50,7 @@ class FileRecord:
         sha256: str,
         inspection: dict[str, Any],
         created_at: str,
+        session_id: str | None = None,
     ):
         self.file_id = file_id
         self.original_name = original_name
@@ -57,6 +60,7 @@ class FileRecord:
         self.sha256 = sha256
         self.inspection = inspection
         self.created_at = created_at
+        self.session_id = session_id
 
 
 class OutputRecord:
@@ -87,6 +91,22 @@ def init_db(db_path: Path) -> None:
         conn.executescript(SCHEMA)
         conn.commit()
     _migrate_outputs(db_path)
+    _migrate_sessions(db_path)
+    _migrate_files(db_path)
+
+
+def _migrate_files(db_path: Path) -> None:
+    """Idempotent column add for `files.session_id` (legacy dbs pre-09-17).
+
+    Rows written before this column existed keep NULL; they simply belong to no
+    session and won't come back with a session's history.
+    """
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute("PRAGMA table_info(files)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "session_id" not in cols:
+            conn.execute("ALTER TABLE files ADD COLUMN session_id TEXT")
+            conn.commit()
 
 
 def _migrate_outputs(db_path: Path) -> None:
@@ -99,10 +119,24 @@ def _migrate_outputs(db_path: Path) -> None:
             conn.commit()
 
 
+def _migrate_sessions(db_path: Path) -> None:
+    """Idempotent column add for `sessions.ui_messages_json` (legacy dbs pre-09-17).
+
+    Old rows have no UI transcript; `get_session_detail` falls back to deriving a
+    text-only one from `messages_json`, so they still render instead of blanking.
+    """
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute("PRAGMA table_info(sessions)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "ui_messages_json" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN ui_messages_json TEXT")
+            conn.commit()
+
+
 def insert_file(db_path: Path, record: FileRecord) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO files (id, original_name, stored_path, file_type, size_bytes, sha256, inspection_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO files (id, original_name, stored_path, file_type, size_bytes, sha256, inspection_json, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.file_id,
                 record.original_name,
@@ -112,18 +146,13 @@ def insert_file(db_path: Path, record: FileRecord) -> None:
                 record.sha256,
                 json.dumps(record.inspection, ensure_ascii=False),
                 record.created_at,
+                record.session_id,
             ),
         )
         conn.commit()
 
 
-def get_file(db_path: Path, file_id: str) -> FileRecord | None:
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,))
-        row = cur.fetchone()
-    if not row:
-        return None
+def _row_to_file(row: sqlite3.Row) -> FileRecord:
     return FileRecord(
         file_id=row["id"],
         original_name=row["original_name"],
@@ -133,7 +162,45 @@ def get_file(db_path: Path, file_id: str) -> FileRecord | None:
         sha256=row["sha256"],
         inspection=json.loads(row["inspection_json"]),
         created_at=row["created_at"],
+        # Legacy rows (pre-migration) have no session_id column value at all.
+        session_id=row["session_id"] if "session_id" in row.keys() else None,
     )
+
+
+def get_file(db_path: Path, file_id: str) -> FileRecord | None:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return _row_to_file(row)
+
+
+def list_session_files(db_path: Path, session_id: str) -> list[FileRecord]:
+    """Files uploaded within one session, oldest first.
+
+    This is what makes an uploaded sheet survive a reload or a session switch:
+    the bytes live in `uploads/`, this row is the link back to the conversation.
+    """
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(
+            "SELECT * FROM files WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+        )
+        rows = cur.fetchall()
+    return [_row_to_file(row) for row in rows]
+
+
+def _file_to_dto(rec: FileRecord) -> dict[str, Any]:
+    """Shaped like FileUploadResponse, so the client reuses its upload mapper."""
+    return {
+        "file_id": rec.file_id,
+        "filename": rec.original_name,
+        "size_bytes": rec.size_bytes,
+        "inspection": rec.inspection,
+    }
 
 
 def insert_output(db_path: Path, record: OutputRecord) -> None:
@@ -177,16 +244,30 @@ def get_output(db_path: Path, output_id: str) -> OutputRecord | None:
 # ----- session messages persistence (debug-only; not reloaded on startup) -----
 
 
-def save_session_messages(db_path: Path, session_id: str, messages: list[Any]) -> None:
-    """Upsert the latest messages snapshot for a session. Debug-only — not read on startup."""
+def save_session_messages(
+    db_path: Path,
+    session_id: str,
+    messages: list[Any],
+    ui_messages: list[Any] | None = None,
+) -> None:
+    """Upsert the latest messages snapshot for a session.
+
+    `messages` is the Anthropic-shaped context sent back to the model; `ui_messages`
+    is the UI-shaped transcript (role/content/tool_calls/segments) the client
+    renders. Both are written together so a reload shows the same interleaved
+    timeline the user watched stream in.
+    """
     payload = json.dumps(messages, ensure_ascii=False)
+    ui_payload = json.dumps(ui_messages, ensure_ascii=False) if ui_messages is not None else None
     updated_at = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO sessions (session_id, messages_json, updated_at) VALUES (?, ?, ?) "
+            "INSERT INTO sessions (session_id, messages_json, ui_messages_json, updated_at) "
+            "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(session_id) DO UPDATE SET messages_json = excluded.messages_json, "
+            "ui_messages_json = COALESCE(excluded.ui_messages_json, sessions.ui_messages_json), "
             "updated_at = excluded.updated_at",
-            (session_id, payload, updated_at),
+            (session_id, payload, ui_payload, updated_at),
         )
         conn.commit()
 
@@ -242,6 +323,40 @@ def _derive_last_user_msg(messages: list[Any]) -> str:
         if text:
             return text[:40] + ("…" if len(text) > 40 else "")
     return ""
+
+
+def _derive_ui_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    """Build a text-only UI transcript from the Anthropic-shaped history.
+
+    Fallback for sessions written before `ui_messages_json` existed: they keep
+    rendering their text instead of coming back empty. Tool rounds are invisible
+    here — the anthropic-shaped history has no summary/status to rebuild them from.
+    """
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, list):
+            # A `user` turn holding only tool_result blocks is a synthetic tool
+            # round-trip, not something the user typed — don't render it.
+            if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+                continue
+            text = "".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        else:
+            text = str(content or "")
+        if not text:
+            continue
+        out.append({
+            "role": role if role in ("user", "assistant") else "assistant",
+            "content": text,
+            "tool_calls": [],
+            "segments": [],
+        })
+    return out
 
 
 def _extract_output_ids(messages: list[Any]) -> list[str]:
@@ -307,28 +422,56 @@ def get_session_detail(
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT session_id, messages_json, updated_at FROM sessions WHERE session_id = ?",
+            "SELECT session_id, messages_json, ui_messages_json, updated_at "
+            "FROM sessions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
     if not row:
-        return None
+        # No messages yet — but a session that has an uploaded file is still a real
+        # session (upload happens before the first message). Synthesize a detail so
+        # its files come back instead of 404-ing the whole session away.
+        files = list_session_files(db_path, session_id)
+        if not files:
+            return None
+        return {
+            "session_id": session_id,
+            "title": "新会话",
+            "updated_at": files[-1].created_at,
+            "message_count": 0,
+            "last_user_msg": "",
+            "messages": [],
+            "output_ids": [],
+            "files": [_file_to_dto(f) for f in files],
+            "has_more": False,
+            "oldest_index": 0,
+            "total_messages": 0,
+        }
     try:
         messages = json.loads(row["messages_json"])
     except (TypeError, ValueError):
         messages = []
 
-    total_messages = len(messages)
+    # The client renders `ui_messages` (role/content/tool_calls/segments). The
+    # Anthropic-shaped `messages` above stays the source for derived metadata.
+    try:
+        ui_messages = json.loads(row["ui_messages_json"]) if row["ui_messages_json"] else None
+    except (TypeError, ValueError):
+        ui_messages = None
+    if not isinstance(ui_messages, list) or not ui_messages:
+        ui_messages = _derive_ui_messages(messages)
+
+    total_messages = len(ui_messages)
     if before_index is not None and before_index >= 0:
-        messages = messages[:before_index]
-        total_messages = len(messages)
-    if limit is not None and limit > 0 and len(messages) > limit:
-        page = messages[-limit:]
+        ui_messages = ui_messages[:before_index]
+        total_messages = len(ui_messages)
+    if limit is not None and limit > 0 and len(ui_messages) > limit:
+        page = ui_messages[-limit:]
         has_more = True
     else:
-        page = messages
+        page = ui_messages
         has_more = False
 
-    oldest_index = max(0, len(messages) - len(page))
+    oldest_index = max(0, len(ui_messages) - len(page))
 
     return {
         "session_id": row["session_id"],
@@ -338,6 +481,7 @@ def get_session_detail(
         "last_user_msg": _derive_last_user_msg(messages),
         "messages": page,
         "output_ids": _extract_output_ids(messages),
+        "files": [_file_to_dto(f) for f in list_session_files(db_path, session_id)],
         "has_more": has_more,
         "oldest_index": oldest_index,
         "total_messages": total_messages,

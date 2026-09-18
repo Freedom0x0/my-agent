@@ -45,7 +45,13 @@ def handle_export(tool_call: ToolCall, session: Any) -> ToolResult:
     sheets = list(session.tables.keys())
     return _ok(
         f"已生成处理结果文件，共 {len(sheets)} 个工作表",
-        data={"output_name": output_name, "sheets": sheets + ["_audit"]},
+        # `output_id` is how the client finds the bytes again (tab + preview). It is
+        # only kept out of the SSE `done` payload, not out of the handler result.
+        data={
+            "output_id": output_id,
+            "output_name": output_name,
+            "sheets": sheets + ["_audit"],
+        },
     )
 
 

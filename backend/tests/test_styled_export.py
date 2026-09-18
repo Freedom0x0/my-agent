@@ -102,7 +102,8 @@ def test_handle_export_styled_basic(session: Session) -> None:
     assert res.success
     assert res.data["output_name"] == "样式结果"
     assert res.data.get("sheets") == ["data"]
-    assert "output_id" not in res.data
+    # The client reopens the result by id — without it the tab can never load.
+    assert res.data["output_id"] == session.output_id
     out_path = session.output_dir / f"{session.output_id}.xlsx"
     assert out_path.exists()
     # Reopen and confirm styles survived. The writer escapes "::" to "_of_".

@@ -67,7 +67,9 @@ def handle_decrypt(tool_call: ToolCall, session: Any) -> ToolResult:
 
     return _ok(
         f"解密成功，共 {len(sheets)} 个工作表",
+        # See export.py — the client needs the id to reopen this file.
         data={
+            "output_id": output_id,
             "output_name": output_name,
             "sheets": list(sheets.keys()),
         },

@@ -74,7 +74,12 @@ def handle_export_styled(tool_call: ToolCall, session: Any) -> ToolResult:
 
     return _ok(
         f"样式导出完成：{sheet}",
-        data={"output_name": output_name, "sheets": [sheet]},
+        # See export.py — the client needs the id to reopen this file.
+        data={
+            "output_id": output_id,
+            "output_name": output_name,
+            "sheets": [sheet],
+        },
     )
 
 
