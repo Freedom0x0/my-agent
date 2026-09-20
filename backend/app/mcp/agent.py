@@ -14,6 +14,7 @@ from .handlers import HANDLERS, truncate_result
 from .prompts import SYSTEM_PROMPT
 from .schemas import (
     MAX_MODEL_SECONDS,
+    MAX_OUTPUT_TOKENS,
     MAX_TOOL_CALLS,
     ToolCall,
     ToolResult,
@@ -83,7 +84,7 @@ def minimax_chat(
     model: str,
     base_url: str,
     api_key: str,
-    max_tokens: int = 4096,
+    max_tokens: int = MAX_OUTPUT_TOKENS,
     temperature: float = 0.0,
 ) -> dict[str, Any]:
     """POST to the Anthropic Messages API and return the parsed JSON dict."""
@@ -143,7 +144,7 @@ async def minimax_chat_stream(
     model: str,
     base_url: str,
     api_key: str,
-    max_tokens: int = 4096,
+    max_tokens: int = MAX_OUTPUT_TOKENS,
     temperature: float = 0.0,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream from the Anthropic Messages API; yield normalized events.
@@ -328,6 +329,30 @@ def _tool_log_line(
         text = summary if len(summary) <= 120 else summary[:117] + "..."
         parts.append(f"| {text}")
     return " ".join(parts)
+
+
+def _log_model_round(
+    session: Any,
+    stop_reason: str | None,
+    round_ms: int,
+    content_blocks: list[dict[str, Any]],
+    usage: dict[str, Any],
+) -> None:
+    """One line per model round. Both loops log through here so the numbers are comparable.
+
+    `cache_read` is the one to watch when tuning cost: the tool schemas dominate the
+    request (they are ~85% of the fixed payload), so a hit there is where the money is.
+    """
+    log_event(
+        logging.INFO,
+        f"model round {stop_reason} {round_ms}ms blocks={len(content_blocks)}"
+        f" tokens_in={usage.get('input_tokens', '?')}"
+        f" tokens_out={usage.get('output_tokens', '?')}"
+        f" cache_read={usage.get('cache_read_input_tokens', '?')}"
+        f" cache_write={usage.get('cache_creation_input_tokens', '?')}"
+        f" session={session.session_id}",
+        request_id=getattr(session, "request_id", None),
+    )
 
 
 def _ui_append(
@@ -573,6 +598,7 @@ def process_chat(
 
     with session.lock:
         for _ in range(MAX_TOOL_CALLS):
+            round_started = time.perf_counter()
             try:
                 response = caller(
                     messages=session.messages,
@@ -589,6 +615,13 @@ def process_chat(
 
             stop_reason = response.get("stop_reason")
             content_blocks = response.get("content") or []
+            _log_model_round(
+                session,
+                stop_reason,
+                int((time.perf_counter() - round_started) * 1000),
+                content_blocks,
+                response.get("usage") or {},
+            )
 
             if stop_reason == "end_turn":
                 text = _extract_text(content_blocks)
@@ -753,14 +786,7 @@ async def process_chat_stream(
             raise ChatError("model_error", f"模型调用失败: {exc}") from exc
 
         round_ms = int((time.perf_counter() - round_started) * 1000)
-        log_event(
-            logging.INFO,
-            f"model round {stop_reason} {round_ms}ms blocks={len(content_blocks)}"
-            f" tokens_in={usage.get('input_tokens', '?')}"
-            f" tokens_out={usage.get('output_tokens', '?')}"
-            f" session={session.session_id}",
-            request_id=getattr(session, "request_id", None),
-        )
+        _log_model_round(session, stop_reason, round_ms, content_blocks, usage)
 
         yield {"type": "model_response", "stop_reason": stop_reason}
 

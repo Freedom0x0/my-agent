@@ -13,6 +13,10 @@ MAX_TOOL_CALLS = 15
 MAX_TOOL_CALL_SECONDS = 120
 # Maximum seconds for a MiniMax API call.
 MAX_MODEL_SECONDS = 120
+# Maximum output tokens for one model response. Reasoning models bill their thinking
+# against this too, so a graph rewrite can exhaust a small budget and come back
+# truncated — see implement.md subtask 5.
+MAX_OUTPUT_TOKENS = 16384
 
 
 class ToolCall(BaseModel):
