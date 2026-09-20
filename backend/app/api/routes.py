@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..config import get_settings
 from ..db import (
@@ -23,9 +23,12 @@ from ..db import (
     init_db,
     insert_file,
     insert_output,
+    list_session_files,
     list_sessions,
 )
 from ..logging_setup import get_ring
+from ..mcp import engine as engine_module
+from ..mcp.session import get_session_store
 from ..mcp.workflow import public_graph
 from ..domain._archive.operations import (
     ConfirmationRequired,
@@ -368,4 +371,62 @@ def create_router() -> APIRouter:
             **public_graph(saved["graph"]),
         }
 
+    @router.post(
+        "/sessions/{session_id}/workflow/execute",
+        responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    )
+    async def execute_session_workflow(session_id: str) -> StreamingResponse:
+        """Approve and run the graph; stream node-level events as SSE.
+
+        This is the 「执行」 button: it advances the stage to `executing` and drives
+        the engine. Node outputs land on disk and in the graph row as they finish.
+        """
+        store = get_session_store()
+        session = store.get_or_create(session_id)
+        if session.graph is None:
+            raise _build_error("workflow_not_found", f"未找到工作流 {session_id}", 404)
+        if session.stage == "executing":
+            raise _build_error("execution_in_progress", "工作流正在执行中", 409)
+        # After a restart (or a fresh process) the session's files live only in
+        # SQLite, but the handlers read them from `session.files` — reload them or
+        # every source node fails with "文件不存在".
+        for rec in list_session_files(_db_path(), session_id):
+            session.files.setdefault(
+                rec.file_id,
+                {
+                    "path": rec.stored_path,
+                    "sha256": rec.sha256,
+                    "original_name": rec.original_name,
+                    "inspection": rec.inspection,
+                },
+            )
+        return StreamingResponse(
+            _sse_stream(engine_module.execute_graph_stream(session, store=store)),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @router.post(
+        "/sessions/{session_id}/workflow/pause",
+        responses={404: {"model": ErrorResponse}},
+    )
+    async def pause_session_workflow(session_id: str) -> dict[str, Any]:
+        """Request a pause: the run stops starting new nodes and lets the current
+        one finish (pandas work can't be interrupted mid-node)."""
+        store = get_session_store()
+        session = store.get(session_id)
+        if session is None:
+            raise _build_error("session_not_found", f"未找到会话 {session_id}", 404)
+        session.pause_requested = True
+        return {"session_id": session_id, "stage": session.stage, "pause_requested": True}
+
     return router
+
+
+def _sse(event: dict[str, Any]) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+async def _sse_stream(source: Any):
+    async for event in source:
+        yield _sse(event)

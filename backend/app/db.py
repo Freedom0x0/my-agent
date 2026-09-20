@@ -210,9 +210,19 @@ def _file_to_dto(rec: FileRecord) -> dict[str, Any]:
 
 
 def insert_output(db_path: Path, record: OutputRecord) -> None:
+    """Write one output row, upserting on `id`.
+
+    A node is re-run whenever the user revises upstream, and a side-effect node
+    derives its output id from its node id — so the same id arrives again. Upsert
+    keeps re-runs from piling up orphan rows (design.md §4 副作用幂等化).
+    """
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO outputs (id, stored_path, source_file_ids_json, plan_json, result_json, status, created_at, output_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO outputs (id, stored_path, source_file_ids_json, plan_json, result_json, status, created_at, output_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET stored_path = excluded.stored_path, "
+            "source_file_ids_json = excluded.source_file_ids_json, plan_json = excluded.plan_json, "
+            "result_json = excluded.result_json, status = excluded.status, "
+            "created_at = excluded.created_at, output_name = excluded.output_name",
             (
                 record.output_id,
                 record.stored_path,

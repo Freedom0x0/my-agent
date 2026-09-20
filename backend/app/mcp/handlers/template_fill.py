@@ -1,7 +1,6 @@
 """tablex_template_fill handler."""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,7 +10,7 @@ import pandas as pd
 from ...db import OutputRecord, init_db, insert_output
 from ...domain.template import TemplateError, fill_template
 from ..schemas import ToolCall, ToolResult
-from ._base import HandlerSpec, _db_path, _fail, _ok
+from ._base import HandlerSpec, _db_path, _fail, _ok, _output_id
 
 
 def handle_template_fill(tool_call: ToolCall, session: Any) -> ToolResult:
@@ -41,7 +40,7 @@ def handle_template_fill(tool_call: ToolCall, session: Any) -> ToolResult:
         except TemplateError as exc:
             return _fail(str(exc))
 
-        output_id = uuid.uuid4().hex
+        output_id = _output_id(session)
         output_path = session.output_dir / f"{output_id}.xlsx"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         # Persist the styled filled template as the primary artifact.

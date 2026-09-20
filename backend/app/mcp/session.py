@@ -34,6 +34,10 @@ class Session:
         # it (`None` until the model proposes one). `stage` is the state machine.
         self.graph: dict[str, Any] | None = None
         self.stage: str = "drafting"
+        # Set by POST /workflow/pause while a run is in flight. The engine checks it
+        # before starting each node — pandas work can't be interrupted mid-node, so
+        # pause means "start nothing new, let the running node finish" (design.md §4).
+        self.pause_requested: bool = False
         self.messages: list[dict[str, Any]] = []
         # UI-shaped transcript (role/content/tool_calls/segments) rendered by the
         # client. Persisted to sessions.ui_messages_json so a reload rebuilds the

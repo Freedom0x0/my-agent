@@ -1,13 +1,12 @@
 """tablex_export handler."""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from ...db import OutputRecord, init_db, insert_output
 from ..schemas import ToolCall, ToolResult
-from ._base import HandlerSpec, _db_path, _fail, _ok, _write_export_workbook
+from ._base import HandlerSpec, _db_path, _fail, _ok, _write_export_workbook, _output_id
 
 
 def handle_export(tool_call: ToolCall, session: Any) -> ToolResult:
@@ -18,7 +17,7 @@ def handle_export(tool_call: ToolCall, session: Any) -> ToolResult:
     if not output_name:
         return _fail("output_name 是必填参数")
 
-    output_id = uuid.uuid4().hex
+    output_id = _output_id(session)
     output_path = session.output_dir / f"{output_id}.xlsx"
     _write_export_workbook(output_path, session.tables, session.audit_events)
 

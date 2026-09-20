@@ -142,6 +142,16 @@ def _fail(error: str, summary: str = "处理失败") -> ToolResult:
     return ToolResult(success=False, summary=summary, error=error[:300])
 
 
+def _output_id(session: Any) -> str:
+    """Id for a side-effect artifact (xlsx + outputs row).
+
+    Normally a fresh uuid. Under the execution engine the session carries
+    `node_output_id`, so re-running a node derives the same id and overwrites its
+    own file + DB row instead of accumulating orphans (design.md §4).
+    """
+    return getattr(session, "node_output_id", None) or uuid.uuid4().hex
+
+
 def _audit(
     session: Any,
     operation: str,

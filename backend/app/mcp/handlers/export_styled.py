@@ -1,7 +1,6 @@
 """tablex_export_styled handler."""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,7 +9,7 @@ from openpyxl import load_workbook
 from ...db import OutputRecord, init_db, insert_output
 from ...domain.styled_export import StyleError, apply_styles
 from ..schemas import ToolCall, ToolResult
-from ._base import HandlerSpec, _db_path, _fail, _ok, _write_export_workbook
+from ._base import HandlerSpec, _db_path, _fail, _ok, _write_export_workbook, _output_id
 
 
 def handle_export_styled(tool_call: ToolCall, session: Any) -> ToolResult:
@@ -27,7 +26,7 @@ def handle_export_styled(tool_call: ToolCall, session: Any) -> ToolResult:
     if sheet_ref not in session.tables:
         return _fail(f"工作表未加载: {sheet_ref}")
 
-    output_id = uuid.uuid4().hex
+    output_id = _output_id(session)
     output_path = session.output_dir / f"{output_id}.xlsx"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

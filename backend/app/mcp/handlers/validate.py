@@ -1,14 +1,13 @@
 """tablex_validate handler."""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from ...db import OutputRecord, init_db, insert_output
 from ...domain.validator import ValidationError, validate
 from ..schemas import ToolCall, ToolResult
-from ._base import HandlerSpec, _audit, _db_path, _fail, _ok, _write_export_workbook
+from ._base import HandlerSpec, _audit, _db_path, _fail, _ok, _write_export_workbook, _output_id
 
 
 def handle_validate(tool_call: ToolCall, session: Any) -> ToolResult:
@@ -74,7 +73,7 @@ def handle_validate(tool_call: ToolCall, session: Any) -> ToolResult:
 
     session.tables[out_sheet_name] = new_df
 
-    output_id = uuid.uuid4().hex
+    output_id = _output_id(session)
     output_path = session.output_dir / f"{output_id}.xlsx"
     tables_for_export = dict(session.tables)
     tables_for_export[out_sheet_name] = new_df

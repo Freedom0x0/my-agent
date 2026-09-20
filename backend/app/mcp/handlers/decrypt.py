@@ -1,7 +1,6 @@
 """tablex_decrypt handler."""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -9,7 +8,7 @@ from typing import Any
 from ...db import OutputRecord, init_db, insert_output
 from ...domain.decrypt import DecryptError, decrypt_workbook
 from ..schemas import ToolCall, ToolResult
-from ._base import HandlerSpec, _audit, _db_path, _fail, _ok, _write_export_workbook
+from ._base import HandlerSpec, _audit, _db_path, _fail, _ok, _write_export_workbook, _output_id
 
 
 def handle_decrypt(tool_call: ToolCall, session: Any) -> ToolResult:
@@ -30,7 +29,7 @@ def handle_decrypt(tool_call: ToolCall, session: Any) -> ToolResult:
     except DecryptError as exc:
         return _fail(str(exc), summary="解密失败")
 
-    output_id = uuid.uuid4().hex
+    output_id = _output_id(session)
     output_path = session.output_dir / f"{output_id}.xlsx"
     _write_export_workbook(output_path, sheets, [])
 

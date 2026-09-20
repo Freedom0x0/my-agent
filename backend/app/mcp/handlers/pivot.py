@@ -1,14 +1,13 @@
 """tablex_pivot handler."""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from ...db import OutputRecord, init_db, insert_output
 from ...domain.pivot import crosstab, pivot_table, unpivot
 from ..schemas import ToolCall, ToolResult
-from ._base import HandlerSpec, _audit, _db_path, _fail, _ok, _write_export_workbook
+from ._base import HandlerSpec, _audit, _db_path, _fail, _ok, _write_export_workbook, _output_id
 
 _OPERATION_DISPATCH = {
     "pivot": lambda df, kw: pivot_table(df, **kw),
@@ -74,7 +73,7 @@ def handle_pivot(tool_call: ToolCall, session: Any) -> ToolResult:
     output_sheet = f"{operation}_结果"
     session.tables[output_sheet] = result_df
 
-    output_id = uuid.uuid4().hex
+    output_id = _output_id(session)
     output_path = session.output_dir / f"{output_id}.xlsx"
     tables_for_export = dict(session.tables)
     tables_for_export[output_sheet] = result_df

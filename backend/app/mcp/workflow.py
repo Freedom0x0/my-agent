@@ -23,6 +23,20 @@ NODE_STATUSES = ("pending", "running", "ok", "error", "stale")
 # are still sent to the model as node-type reference — they are never executed.
 NODE_TOOL_NAMES = {t["name"] for t in TABLEX_TOOL_DEFINITIONS}
 
+# name -> {param: json-schema}. Used to validate an edge's `to_param` against the
+# target tool's real parameters (workflow-graph.md §4, exec-engine PRD).
+TOOL_PARAMS: dict[str, dict[str, Any]] = {
+    t["name"]: (t.get("input_schema") or {}).get("properties") or {}
+    for t in TABLEX_TOOL_DEFINITIONS
+}
+
+# `sheet` is the universal "feed this table in" param. Every (file_id, sheet) tool
+# declares it; an aggregating sink (export / export_styled / …) does not, but its
+# node still needs an ordering edge that says "wire this upstream table in". Allowing
+# `sheet` everywhere keeps those graphs valid while still catching misspellings like
+# `sheets` — which is the whole point of the check.
+UNIVERSAL_EDGE_PARAMS = frozenset({"sheet"})
+
 
 class WorkflowError(ValueError):
     """The model submitted a graph the backend cannot accept.
@@ -111,6 +125,7 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
 
     nodes: list[dict[str, Any]] = []
     ids: set[str] = set()
+    tool_of: dict[str, str] = {}
     for item in nodes_in:
         if not isinstance(item, dict):
             raise WorkflowError("nodes 的每一项必须是对象")
@@ -129,6 +144,7 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
         if not isinstance(input_dict, dict):
             raise WorkflowError(f"节点 {node_id} 的 input 必须是对象")
         ids.add(node_id)
+        tool_of[node_id] = tool
         nodes.append(
             {
                 "id": node_id,
@@ -163,6 +179,12 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
             raise WorkflowError(f"边的 to_node 不存在: {to_node or '(空)'}")
         if not to_param:
             raise WorkflowError(f"边 {from_node}→{to_node} 缺少 to_param")
+        params = TOOL_PARAMS.get(tool_of[to_node], {})
+        if to_param not in params and to_param not in UNIVERSAL_EDGE_PARAMS:
+            raise WorkflowError(
+                f"边 {from_node}→{to_node} 的 to_param '{to_param}' 不是节点 {to_node}"
+                f"（{tool_of[to_node]}）的参数；该工具的参数有: {', '.join(params) or '(无)'}"
+            )
         key = (from_node, to_node, to_param)
         if key in seen_edges:
             continue
@@ -253,6 +275,8 @@ __all__ = [
     "NODE_STATUSES",
     "PROPOSE_WORKFLOW_TOOL",
     "STAGES",
+    "TOOL_PARAMS",
+    "UNIVERSAL_EDGE_PARAMS",
     "WorkflowError",
     "agent_tool_definitions",
     "compute_seq",
