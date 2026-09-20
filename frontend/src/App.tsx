@@ -17,7 +17,9 @@ import {
 
 import { ChatList } from "./components/chat/ChatList";
 import { ChatScroll } from "./components/chat/ChatScroll";
-import { Previewer } from "./components/Previewer";
+import { FlowBar } from "./components/canvas/FlowBar";
+import { WorkflowCanvas } from "./components/canvas/WorkflowCanvas";
+import { RightPanel } from "./components/panels/RightPanel";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SenderPopover } from "./components/SenderPopover";
 import { useAppStore, bootstrapApp } from "./hooks/useAppStore";
@@ -59,6 +61,9 @@ export function App() {
   const error = useAppStore((s) => s.error);
   const setPanelWidth = useAppStore((s) => s.setPanelWidth);
   const togglePanel = useAppStore((s) => s.togglePanel);
+  const workspaceView = useAppStore((s) => s.workspaceView);
+  const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
+  const chatUnread = useAppStore((s) => s.chatUnread);
 
   const isProcessing = status === "processing";
   const hasFiles = files.length > 0;
@@ -147,26 +152,60 @@ export function App() {
                 <span className="chat-error-dismiss">×</span>
               </div>
             )}
-            <ChatScroll testId="chat-history">
-              {messageCount === 0 ? (
-                <div className="chat-empty">
-                  <Welcome icon={
-                    <svg viewBox="0 0 64 64" width="64" height="64" fill="none">
-                      <rect x="6" y="6" width="52" height="52" rx="12" fill="#2b4a8b" />
-                      <g stroke="#fff" strokeWidth="2.6" strokeLinecap="round">
-                        <path d="M16 22h32" /><path d="M16 32h22" /><path d="M16 42h14" />
-                      </g>
-                      <circle cx="50" cy="42" r="4" fill="#f3c969" />
-                    </svg>
-                  } title={hasFiles ? "想先做点什么？" : "欢迎使用"}
-                  description={hasFiles ? "向 Agent 描述你的需求" : "上传 Excel 或 CSV 文件即可开始"}
-                  variant="borderless" />
-                  {hasFiles && <Prompts items={PROMPTS} onItemClick={(info) => { const p = PROMPTS.find((x) => x.key === info.data.key); if (p) { setInput(p.label); submit(p.label); } }} />}
-                </div>
+
+            <div className="viewtabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workspaceView === "chat"}
+                className={`vtab ${workspaceView === "chat" ? "is-active" : ""}`}
+                data-testid="view-tab-chat"
+                onClick={() => setWorkspaceView("chat")}
+              >
+                会话
+                {chatUnread && <span className="unread-dot" data-testid="chat-unread" />}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workspaceView === "canvas"}
+                className={`vtab ${workspaceView === "canvas" ? "is-active" : ""}`}
+                data-testid="view-tab-canvas"
+                onClick={() => setWorkspaceView("canvas")}
+              >
+                画布
+              </button>
+            </div>
+
+            <div className="view-body">
+              {workspaceView === "chat" ? (
+                <ChatScroll testId="chat-history">
+                  {messageCount === 0 ? (
+                    <div className="chat-empty">
+                      <Welcome icon={
+                        <svg viewBox="0 0 64 64" width="64" height="64" fill="none">
+                          <rect x="6" y="6" width="52" height="52" rx="12" fill="#2b4a8b" />
+                          <g stroke="#fff" strokeWidth="2.6" strokeLinecap="round">
+                            <path d="M16 22h32" /><path d="M16 32h22" /><path d="M16 42h14" />
+                          </g>
+                          <circle cx="50" cy="42" r="4" fill="#f3c969" />
+                        </svg>
+                      } title={hasFiles ? "想先做点什么？" : "欢迎使用"}
+                      description={hasFiles ? "向 Agent 描述你的需求" : "上传 Excel 或 CSV 文件即可开始"}
+                      variant="borderless" />
+                      {hasFiles && <Prompts items={PROMPTS} onItemClick={(info) => { const p = PROMPTS.find((x) => x.key === info.data.key); if (p) { setInput(p.label); submit(p.label); } }} />}
+                    </div>
+                  ) : (
+                    <ChatList />
+                  )}
+                </ChatScroll>
               ) : (
-                <ChatList />
+                <WorkflowCanvas />
               )}
-            </ChatScroll>
+            </div>
+
+            <FlowBar />
+
             <div className="chat-input-wrap">
               <SenderPopover
                 value={input}
@@ -212,7 +251,7 @@ export function App() {
             className="workspace-preview"
             style={{ width: panel.previewWidth, display: panel.previewCollapsed ? "none" : undefined }}
           >
-            <Previewer />
+            <RightPanel />
           </aside>
         </main>
       </div>

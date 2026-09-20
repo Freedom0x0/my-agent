@@ -1,6 +1,6 @@
 import { ApiError, chatStream, readSseStream } from "../../../api/httpClient";
 import type { StreamEvent } from "../../../api/httpClient";
-import { makeUserFacingError } from "../../../api/mappers";
+import { makeUserFacingError, mapGraph, mapStage } from "../../../api/mappers";
 import type { ChatMessage } from "../../../domain/workflow";
 import { newMessageId } from "../types";
 import type { Actions, WorkflowState } from "../types";
@@ -109,6 +109,11 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
             case "done":
               doneBox.value = evt;
               break;
+            case "stage_change": {
+              const stage = mapStage(evt.stage);
+              if (stage) get().setStage(stage);
+              break;
+            }
             case "error":
               errorBox.value = { code: evt.code, message: evt.message };
               break;
@@ -133,6 +138,15 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
           return;
         }
 
+        // `done` carries the authoritative graph + stage for this turn.
+        const done = doneBox.value;
+        if (done?.graph) {
+          get().applyGraph(mapGraph(done.graph), mapStage(done.stage));
+        } else if (done?.stage) {
+          const stage = mapStage(done.stage);
+          if (stage) get().setStage(stage);
+        }
+
         if (!doneBox.value) {
           // The stream closed without a terminal event — don't call that a success.
           const friendly = makeUserFacingError("network_error", "连接中断");
@@ -143,7 +157,6 @@ export function chatActions(set: Set, get: Get): Pick<Actions, "sendMessage" | "
         }
 
         // Insurance: if the model produced text that never arrived as deltas, keep it.
-        const done = doneBox.value;
         if (done?.reply && !sawText) {
           get().appendTextDelta(done.reply, { separate: true });
         }

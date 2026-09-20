@@ -3,6 +3,7 @@ import {
   chatResponseSchema,
   type ChatRequest,
   type ChatResponse,
+  type GraphDto,
 } from "./contracts";
 import { ApiError, getApiBase, httpClient, newRequestId, type RequestOptions } from "./http";
 
@@ -26,7 +27,8 @@ export type StreamEvent =
   | { type: "text"; delta: string }
   | { type: "tool_start"; name: string; id: string }
   | { type: "tool_end"; id?: string; name: string; summary: string; status: string; output_id?: string | null; output_name?: string | null }
-  | { type: "done"; reply: string; tool_calls: StreamToolCall[]; output_id?: string | null; output_name?: string | null; sheets: string[]; segments?: StreamSegment[] }
+  | { type: "stage_change"; stage: string }
+  | { type: "done"; reply: string; tool_calls: StreamToolCall[]; output_id?: string | null; output_name?: string | null; sheets: string[]; segments?: StreamSegment[]; stage?: string; graph?: GraphDto }
   | { type: "error"; code: string; message: string };
 
 export type StreamToolCall = {

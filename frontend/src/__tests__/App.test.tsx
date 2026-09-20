@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act } from "@testing-library/react";
 
 import { App } from "../App";
 import { api } from "../api/httpClient";
@@ -27,6 +28,8 @@ vi.mock("../api/httpClient", async () => {
       chat: vi.fn(),
       listSessions: vi.fn().mockResolvedValue([]),
       getSession: vi.fn(),
+      // No graph by default — the canvas renders its empty state.
+      getWorkflow: vi.fn().mockRejectedValue(new Error("workflow_not_found")),
       downloadUrl: vi.fn((id: string) => `/api/outputs/${id}`),
       download: vi.fn().mockRejectedValue(new Error("not mocked")),
       downloadUploadedFile: vi.fn().mockRejectedValue(new Error("not mocked")),
@@ -54,6 +57,7 @@ const mockedApi = api as unknown as {
   chat: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
   getSession: ReturnType<typeof vi.fn>;
+  getWorkflow: ReturnType<typeof vi.fn>;
   downloadUrl: ReturnType<typeof vi.fn>;
   download: ReturnType<typeof vi.fn>;
   downloadUploadedFile: ReturnType<typeof vi.fn>;
@@ -65,6 +69,7 @@ beforeEach(() => {
     window.localStorage.clear();
   }
   mockedApi.listSessions.mockResolvedValue([]);
+  mockedApi.getWorkflow.mockRejectedValue(new Error("workflow_not_found"));
   hoisted.sseMock.chatStream.mockReset();
   hoisted.sseMock.readSseStream.mockReset();
   // Clear call history but keep the default implementation (set in vi.mock
@@ -94,6 +99,12 @@ beforeEach(() => {
     lastChatOutputId: null,
     lastChatOutputName: null,
     error: null,
+    graph: null,
+    graphStage: null,
+    selectedNodeId: null,
+    workspaceView: "chat",
+    rightPanel: "file",
+    chatUnread: false,
   });
 });
 
@@ -836,6 +847,70 @@ describe("Inline tool in bubble (segments)", () => {
     expect(last?.segments?.[2]).toEqual({ type: "text", content: "完成" });
 
     expect(await screen.findByTestId("tool-inline-tablex_normalize")).toBeInTheDocument();
+  });
+});
+
+describe("V. Workspace view tabs (会话 / 画布)", () => {
+  const graph = {
+    nodes: [
+      {
+        id: "n1",
+        seq: 1,
+        label: "读取文件",
+        tool: "tablex_upload",
+        input: { file_id: "f_a" },
+        status: "ok" as const,
+        output: null,
+        duration_ms: null,
+        error: null,
+        edited: false,
+        cached: false,
+      },
+      {
+        id: "n2",
+        seq: 2,
+        label: "按部门汇总",
+        tool: "tablex_group_summary",
+        input: { group_by: ["部门"] },
+        status: "pending" as const,
+        output: null,
+        duration_ms: null,
+        error: null,
+        edited: false,
+        cached: false,
+      },
+    ],
+    edges: [{ from_node: "n1", to_node: "n2", to_param: "sheet" }],
+  };
+
+  it("carries the shared action bar, opens node detail on click, and flags unread chat", () => {
+    useAppStore.setState({ graph, graphStage: "awaiting_approval" });
+    render(<App />);
+
+    // Chat is the default view; its scroll container unmounts when the canvas shows.
+    expect(screen.getByTestId("chat-history")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("view-tab-canvas"));
+    expect(screen.getByTestId("workflow-canvas")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-history")).toBeNull();
+
+    // The action bar + input are siblings of the view body, so both tabs share them.
+    expect(screen.getByTestId("flowbar")).toBeInTheDocument();
+    expect(screen.getAllByTestId("sender").length).toBeGreaterThan(0);
+
+    // Clicking a node switches the right pane to its detail.
+    fireEvent.click(screen.getByTestId("graph-node-n2"));
+    expect(screen.getByTestId("panel-tab-node").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("node-detail").textContent).toContain("按部门汇总");
+
+    // The model speaks while the user is on the canvas → the chat tab gets a dot.
+    act(() => {
+      useAppStore.getState().appendTextDelta("图已生成", { separate: true });
+    });
+    expect(screen.getByTestId("chat-unread")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("view-tab-chat"));
+    expect(screen.queryByTestId("chat-unread")).toBeNull();
+    expect(screen.getByTestId("chat-history")).toBeInTheDocument();
   });
 });
 

@@ -8,6 +8,7 @@ import type {
   WorkbookPreview,
   AppStatus,
 } from "../../domain/workflow";
+import type { Graph, Stage } from "../../domain/graph";
 import {
   DEFAULT_SIDER_WIDTH,
   DEFAULT_PREVIEW_WIDTH,
@@ -21,6 +22,13 @@ export type PanelState = {
 };
 
 export type ReactionValue = "up" | "down" | null;
+
+/** Workspace view tab — chat transcript or workflow canvas. Bottom action bar and
+ *  input are shared by both, so the user can talk about the graph without leaving it. */
+export type WorkspaceView = "chat" | "canvas";
+
+/** Right-pane tab — node detail (canvas) or the existing file/output previewer. */
+export type RightPanelTab = "node" | "file";
 
 export type WorkflowState = {
   sessions: SessionSummary[];
@@ -47,6 +55,14 @@ export type WorkflowState = {
   sessionHasMore: Record<string, boolean>;
   sessionLoadingOlder: boolean;
   oldestLoadedIndexBySession: Record<string, number>;
+
+  // Workflow graph (transient — refetched per session, never persisted)
+  graph: Graph | null;
+  graphStage: Stage | null;
+  selectedNodeId: string | null;
+  workspaceView: WorkspaceView;
+  rightPanel: RightPanelTab;
+  chatUnread: boolean;
 };
 
 export const initial: WorkflowState = {
@@ -79,6 +95,12 @@ export const initial: WorkflowState = {
   sessionHasMore: {},
   sessionLoadingOlder: false,
   oldestLoadedIndexBySession: {},
+  graph: null,
+  graphStage: null,
+  selectedNodeId: null,
+  workspaceView: "chat",
+  rightPanel: "file",
+  chatUnread: false,
 };
 
 export const SESSION_KEY = "tablex.current_session_id";

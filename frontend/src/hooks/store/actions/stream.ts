@@ -51,6 +51,9 @@ export function streamActions(
       // ponytail: one store write per token, each re-parsing the whole markdown of
       // this bubble. Fine at chat length; batch deltas into a rAF if long answers lag.
       set((s) => ({
+        // The model spoke while the user was looking at the canvas — flag it, or
+        // the answer is missed until they think to switch back.
+        chatUnread: s.workspaceView === "chat" ? s.chatUnread : true,
         messages: patchTail(s.messages, (m) => {
           const segs = m.segments ?? EMPTY_SEGMENTS;
           const tail = segs[segs.length - 1];

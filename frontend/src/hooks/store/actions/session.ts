@@ -49,6 +49,9 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         lastChatSheets: [],
         lastChatOutputId: null,
         messageReactions: {},
+        graph: null,
+        graphStage: null,
+        selectedNodeId: null,
       });
       localStorage.setItem(SESSION_KEY, id);
       try {
@@ -70,6 +73,9 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
           set({ error: makeUserFacingError(err.errorCode, err.message) });
         }
       }
+      // Not awaited: the transcript is what the user came for, the graph can land
+      // a moment later. Guarded inside against a session switch racing it.
+      void get().loadWorkflow(id);
     },
 
     createSession: () => {
@@ -88,6 +94,9 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         lastChatSheets: [],
         lastChatOutputId: null,
         messageReactions: {},
+        graph: null,
+        graphStage: null,
+        selectedNodeId: null,
       });
       localStorage.setItem(SESSION_KEY, id);
       return id;

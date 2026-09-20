@@ -67,6 +67,67 @@ export const chatResponseSchema = z.object({
   error_code: z.string().nullable().optional(),
 });
 
+// --- Workflow graph (workflow-graph.md §2/§3) ---
+
+export const nodeStatusSchema = z.enum(["pending", "running", "ok", "error", "stale"]);
+
+export const stageSchema = z.enum([
+  "drafting",
+  "awaiting_approval",
+  "executing",
+  "paused",
+  "revising",
+]);
+
+export const nodeOutputSchema = z
+  .object({
+    kind: z.string(),
+    ref: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
+    text: z.string().nullable().optional(),
+    columns: z.array(z.string()).nullable().optional(),
+    rows: z.array(z.array(z.string())).nullable().optional(),
+  })
+  .nullable()
+  .optional();
+
+export const graphNodeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  tool: z.string(),
+  input: z.record(z.unknown()).optional(),
+  status: nodeStatusSchema.optional(),
+  output: nodeOutputSchema,
+  duration_ms: z.number().nullable().optional(),
+  error: z.string().nullable().optional(),
+  edited: z.boolean().optional(),
+  cached: z.boolean().optional(),
+  // Derived by the backend — public_graph() attaches it, so the UI never computes it.
+  seq: z.number(),
+});
+
+export const graphEdgeSchema = z.object({
+  from_node: z.string(),
+  to_node: z.string(),
+  to_param: z.string(),
+});
+
+export const graphSchema = z.object({
+  nodes: z.array(graphNodeSchema),
+  edges: z.array(graphEdgeSchema).optional(),
+});
+
+export const workflowResponseSchema = graphSchema.extend({
+  session_id: z.string(),
+  stage: stageSchema,
+});
+
+export type GraphNodeDto = z.infer<typeof graphNodeSchema>;
+export type GraphEdgeDto = z.infer<typeof graphEdgeSchema>;
+export type GraphDto = z.infer<typeof graphSchema>;
+export type WorkflowResponse = z.infer<typeof workflowResponseSchema>;
+export type StageDto = z.infer<typeof stageSchema>;
+
 // --- Inspection ---
 
 export const issueSchema = z.object({

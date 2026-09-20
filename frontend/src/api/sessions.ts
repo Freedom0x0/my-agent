@@ -1,8 +1,10 @@
 import {
   sessionDetailSchema,
   sessionListResponseSchema,
+  workflowResponseSchema,
   type SessionDetail,
   type SessionSummary,
+  type WorkflowResponse,
 } from "./contracts";
 import { httpClient, type RequestOptions } from "./http";
 
@@ -30,6 +32,19 @@ export function getSession(
   return httpClient.getJson(
     `/sessions/${encodeURIComponent(sessionId)}${query}`,
     sessionDetailSchema,
+    options,
+  );
+}
+
+/** The session's workflow graph + stage. 404 (`workflow_not_found`) means the
+ *  session has no graph yet — the caller treats that as "no graph", not an error. */
+export function getWorkflow(
+  sessionId: string,
+  options?: RequestOptions,
+): Promise<WorkflowResponse> {
+  return httpClient.getJson(
+    `/sessions/${encodeURIComponent(sessionId)}/workflow`,
+    workflowResponseSchema,
     options,
   );
 }

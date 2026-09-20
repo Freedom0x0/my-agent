@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import { chatActions } from "./actions/chat";
 import { fileActions } from "./actions/file";
+import { graphActions } from "./actions/graph";
 import { panelActions } from "./actions/panel";
 import { reactionActions } from "./actions/reactions";
 import { sessionActions } from "./actions/session";
@@ -22,6 +23,7 @@ export const useAppStore = create<WorkflowState & Actions>()(
       ...streamActions(set, get),
       ...fileActions(set, get),
       ...reactionActions(set),
+      ...graphActions(set, get),
     }),
     {
       name: "tablex.app",

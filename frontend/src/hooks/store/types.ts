@@ -1,9 +1,16 @@
 import type { PreviewTarget, Tab } from "../../domain/workflow";
+import type { Graph, Stage } from "../../domain/graph";
 
 // Re-export shared state types from state.ts so slice helpers can import
 // everything from one place.
-export type { WorkflowState, PanelState, ReactionValue } from "./state";
-import type { ReactionValue } from "./state";
+export type {
+  WorkflowState,
+  PanelState,
+  ReactionValue,
+  WorkspaceView,
+  RightPanelTab,
+} from "./state";
+import type { ReactionValue, RightPanelTab, WorkspaceView } from "./state";
 
 /** Which preview cache a tab refId belongs to. */
 export type PreviewKind = "file" | "output";
@@ -58,6 +65,15 @@ export type Actions = {
   // Panels
   setPanelWidth: (side: "sider" | "preview", width: number) => void;
   togglePanel: (side: "sider" | "preview") => void;
+
+  // Workflow graph
+  loadWorkflow: (sessionId: string) => Promise<void>;
+  applyGraph: (graph: Graph, stage?: Stage | null) => void;
+  setStage: (stage: Stage) => void;
+  clearWorkflow: () => void;
+  selectNode: (nodeId: string | null) => void;
+  setWorkspaceView: (view: WorkspaceView) => void;
+  setRightPanel: (tab: RightPanelTab) => void;
 
   // Reactions (P)
   toggleReaction: (msgId: string, reaction: ReactionValue) => void;

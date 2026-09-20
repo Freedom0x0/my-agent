@@ -7,9 +7,12 @@ import type {
   ToolCallResult,
   UserFacingError,
 } from "../domain/models";
+import type { Graph, GraphNode, Stage } from "../domain/graph";
 import type {
   ChatResponse,
   FileUploadResponse,
+  GraphDto,
+  GraphNodeDto,
   MessageDto,
   SheetInspectionDto,
   ToolCallResultDto,
@@ -42,6 +45,48 @@ export function makeUserFacingError(
   fallback: string,
 ): UserFacingError {
   return { errorCode, message: mapErrorCodeToMessage(errorCode, fallback) };
+}
+
+/** Wire → domain for the workflow graph. Backend-owned fields get their defaults
+ *  filled in so the UI never has to guard `status === undefined`. */
+export function mapGraph(dto: GraphDto): Graph {
+  return {
+    nodes: (dto.nodes ?? []).map(mapGraphNode),
+    edges: (dto.edges ?? []).map((e) => ({
+      from_node: e.from_node,
+      to_node: e.to_node,
+      to_param: e.to_param,
+    })),
+  };
+}
+
+function mapGraphNode(dto: GraphNodeDto): GraphNode {
+  return {
+    id: dto.id,
+    label: dto.label,
+    tool: dto.tool,
+    input: dto.input ?? {},
+    status: dto.status ?? "pending",
+    output: dto.output ?? null,
+    duration_ms: dto.duration_ms ?? null,
+    error: dto.error ?? null,
+    edited: dto.edited ?? false,
+    cached: dto.cached ?? false,
+    seq: dto.seq,
+  };
+}
+
+export function mapStage(stage: string | undefined): Stage | null {
+  switch (stage) {
+    case "drafting":
+    case "awaiting_approval":
+    case "executing":
+    case "paused":
+    case "revising":
+      return stage;
+    default:
+      return null;
+  }
 }
 
 export function mapUploadResponse(resp: FileUploadResponse): FileItem {
