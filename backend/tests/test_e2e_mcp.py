@@ -239,3 +239,35 @@ def test_e2e_chat_rejects_unknown_file(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["error_code"] == "file_not_found"
+
+
+def test_e2e_chat_graph_carries_seq_like_the_workflow_route(client: TestClient) -> None:
+    """Both surfaces must hand the client the same shape.
+
+    `GET /workflow` returns `public_graph()` (nodes numbered). `/api/chat` used to
+    return the raw stored graph, so `seq` was null there and the client would have
+    had to reimplement the topological numbering in TypeScript.
+    """
+    file_id = _upload(client, FIXTURES / "expenses_and_budget.xlsx")
+
+    agent_module.set_chat_caller(
+        lambda **_kw: _response(
+            [_tool_use_block("tu-1", META_TOOL_NAME, _workflow_graph(file_id))],
+            stop_reason="tool_use",
+        )
+    )
+    try:
+        chat = client.post(
+            "/api/chat",
+            json={"message": "按部门汇总", "file_ids": [file_id], "session_id": "seq-shape"},
+        ).json()
+    finally:
+        agent_module.set_chat_caller(None)
+
+    route = client.get("/api/sessions/seq-shape/workflow").json()
+
+    chat_nodes = chat["graph"]["nodes"]
+    assert chat_nodes, "graph should not be empty"
+    assert [n["seq"] for n in chat_nodes] == [n["seq"] for n in route["nodes"]]
+    assert chat_nodes[0]["seq"] == 1  # numbering actually happened
+    assert chat["graph"]["edges"] == route["edges"]

@@ -463,3 +463,42 @@ def test_set_chat_caller_restores_default(monkeypatch) -> None:
     assert agent_module._default_chat_caller is custom
     set_chat_caller(None)
     assert agent_module._default_chat_caller is agent_module.minimax_chat
+
+
+def test_render_sheet_structure_lists_columns_and_issues() -> None:
+    """The model commits a whole graph up front — it needs the real sheets/columns."""
+    from backend.app.mcp.agent import _render_sheet_structure
+
+    text = "\n".join(_render_sheet_structure({
+        "sheets": [{
+            "name": "收支明细", "row_count": 10, "column_count": 2,
+            "columns": [{"name": "部门", "inferred_type": "text"},
+                        {"name": "日期", "inferred_type": "date"}],
+            "issues": [{"code": "mixed_date", "column": "日期",
+                        "message": "列 日期 存在多种日期格式"}],
+        }],
+    }))
+    assert "`收支明细`" in text
+    assert "10 行 × 2 列" in text
+    assert "部门:text, 日期:date" in text
+    assert "列 日期 存在多种日期格式" in text
+    # The issue message already names the column — must not be prefixed again.
+    assert "列 `日期` 列" not in text
+
+
+def test_render_sheet_structure_caps_wide_sheets() -> None:
+    from backend.app.mcp.agent import _MAX_COLS_PER_SHEET, _render_sheet_structure
+
+    cols = [{"name": f"c{i}", "inferred_type": "text"} for i in range(_MAX_COLS_PER_SHEET + 3)]
+    text = "\n".join(_render_sheet_structure({
+        "sheets": [{"name": "宽表", "row_count": 1, "column_count": len(cols), "columns": cols}],
+    }))
+    assert f"共 {len(cols)} 列" in text
+    assert "c0:text" in text
+
+
+def test_render_sheet_structure_tolerates_missing_inspection() -> None:
+    from backend.app.mcp.agent import _render_sheet_structure
+
+    assert _render_sheet_structure(None) == []
+    assert _render_sheet_structure({"sheets": []}) == []

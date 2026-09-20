@@ -24,6 +24,7 @@ from .workflow import (
     WorkflowError,
     agent_tool_definitions,
     normalize_graph,
+    public_graph,
     render_graph_context,
 )
 
@@ -355,6 +356,38 @@ def _ui_append(
     })
 
 
+# ponytail: flat caps per file; widen if real files routinely exceed them.
+_MAX_SHEETS_IN_CONTEXT = 10
+_MAX_COLS_PER_SHEET = 40
+
+
+def _render_sheet_structure(inspection: Any) -> list[str]:
+    """`工作表 X（n 行 × m 列）：col:type, …` + its data issues.
+
+    The model has to commit a whole graph in one shot, so it needs the *real*
+    sheet and column names up front. Without them it guesses (`Sheet1`) and the
+    graph fails at execution — see `09-18-workflow-eval-set`.
+    """
+    sheets = (inspection or {}).get("sheets") or []
+    lines: list[str] = []
+    for sheet in sheets[:_MAX_SHEETS_IN_CONTEXT]:
+        cols = sheet.get("columns") or []
+        shown = ", ".join(f"{c.get('name')}:{c.get('inferred_type', '?')}" for c in cols[:_MAX_COLS_PER_SHEET])
+        if len(cols) > _MAX_COLS_PER_SHEET:
+            shown += f", …（共 {len(cols)} 列）"
+        lines.append(
+            f"  - 工作表 `{sheet.get('name')}`"
+            f"（{sheet.get('row_count', '?')} 行 × {sheet.get('column_count', '?')} 列）：{shown}"
+        )
+        for issue in sheet.get("issues") or []:
+            # `message` already names the column ("列 日期 存在多种日期格式"),
+            # so no prefix — it would read "列 `日期` 列 日期 存在…".
+            lines.append(f"      ⚠ {issue.get('message') or issue.get('code', '')}")
+    if len(sheets) > _MAX_SHEETS_IN_CONTEXT:
+        lines.append(f"  - …（共 {len(sheets)} 个工作表）")
+    return lines
+
+
 def _build_user_text(user_message: str, session: Session) -> str:
     """First message carries the available files; every message carries the graph."""
     lines = [user_message]
@@ -363,6 +396,7 @@ def _build_user_text(user_message: str, session: Session) -> str:
         for fid, info in session.files.items():
             name = info.get("original_name", "?")
             lines.append(f"- file_id=`{fid}` 名称=`{name}`")
+            lines.extend(_render_sheet_structure(info.get("inspection")))
     if session.graph:
         lines += ["", render_graph_context(session.graph)]
     return "\n".join(lines)
@@ -470,6 +504,16 @@ def _run_tool_round(
     return tool_results, submitted
 
 
+def _public_graph(graph: Any) -> dict[str, Any] | None:
+    """Graph shaped for the client: every node carries its derived `seq`.
+
+    `/api/chat` and `GET /api/sessions/{id}/workflow` must agree, so both go
+    through here. Otherwise the client would have to reimplement the Kahn +
+    heap tie-break in TypeScript to number the nodes.
+    """
+    return public_graph(graph) if graph else None
+
+
 def _make_response(session: Session, reply: str, error_code: str | None = None) -> ChatResponse:
     return ChatResponse(
         reply=reply,
@@ -479,7 +523,7 @@ def _make_response(session: Session, reply: str, error_code: str | None = None) 
         sheets=list(session.tables.keys()),
         error_code=error_code,
         stage=session.stage,
-        graph=session.graph,
+        graph=_public_graph(session.graph),
     )
 
 
@@ -625,6 +669,10 @@ def _process_chat_setup(
                 "path": rec.stored_path,
                 "sha256": rec.sha256,
                 "original_name": rec.original_name,
+                # Sheet/column structure + data issues, captured at upload. The model
+                # has to commit a whole graph up front, so without this it can only
+                # guess sheet names and columns — and guess wrong.
+                "inspection": rec.inspection,
             }
 
     if not settings.MODEL_BASE_URL or not settings.MODEL_API_KEY or not settings.MODEL_NAME:
@@ -739,7 +787,7 @@ async def process_chat_stream(
                 "sheets": list(session.tables.keys()),
                 "segments": segments,
                 "stage": session.stage,
-                "graph": session.graph,
+                "graph": _public_graph(session.graph),
             }
             return
 
@@ -847,7 +895,7 @@ async def process_chat_stream(
                     "sheets": list(session.tables.keys()),
                     "segments": segments,
                     "stage": session.stage,
-                    "graph": session.graph,
+                    "graph": _public_graph(session.graph),
                 }
                 return
             store.persist_messages(session)
