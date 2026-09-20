@@ -16,6 +16,7 @@ from backend.app.db import FileRecord, init_db, insert_file
 from backend.app.main import create_app
 from backend.app.mcp import agent as agent_module
 from backend.app.mcp.session import reset_session_store
+from backend.app.mcp.workflow import META_TOOL_NAME
 
 
 @pytest.fixture()
@@ -113,9 +114,10 @@ def test_chat_stream_end_turn_emits_text_and_done(client: TestClient) -> None:
     assert done["reply"] == "你好"
 
 
-def test_chat_stream_tool_then_end_turn(
+def test_chat_stream_direct_tool_call_is_rejected_then_end_turn(
     app_with_data_dir, client: TestClient, sample_file: Path,
 ) -> None:
+    """A directly-called node-type tool is handed back as an error — never run."""
     _, tmp_path = app_with_data_dir
     file_id = "file-001"
     record = FileRecord(
@@ -126,7 +128,7 @@ def test_chat_stream_tool_then_end_turn(
         size_bytes=sample_file.stat().st_size,
         sha256="x",
         inspection={"filename": "sample.xlsx", "file_type": "xlsx", "sheets": []},
-        created_at=_dt.datetime.utcnow().isoformat(),
+        created_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
     )
     insert_file(tmp_path / "runtime" / "metadata.db", record)
 
@@ -154,21 +156,25 @@ def test_chat_stream_tool_then_end_turn(
     assert "tool_end" in types
     tool_end = next(e for e in events if e["type"] == "tool_end")
     assert tool_end["name"] == "tablex_inspect"
-    assert tool_end["status"] in {"ok", "error"}
+    assert tool_end["status"] == "error"
+    assert "不能直接调用" in tool_end["summary"]
     # `id` is how the client pairs tool_end with its tool_start; without it parallel
     # tool calls in one round can't be resolved.
     assert tool_end["id"] == "tu-1"
     done = next(e for e in events if e["type"] == "done")
     assert done["reply"] == "你好"
+    assert done["stage"] == "drafting"
+    assert done["graph"] is None
     # output_id MUST NOT leak through done payload; only output_name + sheets.
     assert "output_id" not in done
 
 
-def test_chat_stream_done_event_uses_output_name(
+def test_chat_stream_propose_workflow_emits_graph_and_stops(
     app_with_data_dir, client: TestClient, sample_file: Path,
 ) -> None:
+    """Submitting the graph ends the turn: stage_change + done carry the graph."""
     _, tmp_path = app_with_data_dir
-    file_id = "file-002"
+    file_id = "file-graph"
     insert_file(
         tmp_path / "runtime" / "metadata.db",
         FileRecord(
@@ -179,50 +185,66 @@ def test_chat_stream_done_event_uses_output_name(
             size_bytes=sample_file.stat().st_size,
             sha256="x",
             inspection={"filename": "sample.xlsx", "file_type": "xlsx", "sheets": []},
-            created_at=_dt.datetime.utcnow().isoformat(),
+            created_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
         ),
     )
 
-    async def stream_with_export() -> AsyncIterator[dict[str, Any]]:
-        # First call: tool_use for export (no output_name → error → done)
+    graph = {
+        "nodes": [
+            {"id": "n_up", "label": "读取明细", "tool": "tablex_upload", "input": {"file_id": file_id}},
+            {"id": "n_sum", "label": "按部门汇总", "tool": "tablex_group_summary", "input": {"group_by": ["部门"]}},
+        ],
+        "edges": [{"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"}],
+    }
+
+    async def stream_propose() -> AsyncIterator[dict[str, Any]]:
         yield {"type": "model_meta", "message_id": "m"}
-        yield {"type": "tool_use_start", "id": "tu-1", "name": "tablex_export"}
-        yield {"type": "tool_use_delta", "id": "tu-1", "partial_json": "{}"}
+        yield {"type": "text", "delta": "这样处理"}
+        yield {"type": "tool_use_start", "id": "tu-1", "name": META_TOOL_NAME}
+        yield {"type": "tool_use_delta", "id": "tu-1", "partial_json": json.dumps(graph, ensure_ascii=False)}
         yield {"type": "tool_use_end", "id": "tu-1"}
         yield {
-            "type": "message_done", "stop_reason": "tool_use",
+            "type": "message_done",
+            "stop_reason": "tool_use",
             "content_blocks": [
-                {"type": "tool_use", "id": "tu-1", "name": "tablex_export", "input": {}},
+                {"type": "text", "text": "这样处理"},
+                {"type": "tool_use", "id": "tu-1", "name": META_TOOL_NAME, "input": graph},
             ],
         }
 
-    async def stream_end() -> AsyncIterator[dict[str, Any]]:
-        yield {"type": "model_meta", "message_id": "m"}
-        yield {"type": "text", "delta": "ok"}
-        yield {"type": "message_done", "stop_reason": "end_turn",
-               "content_blocks": [{"type": "text", "text": "ok"}]}
-
-    responses = [stream_with_export(), stream_end()]
+    calls = 0
 
     async def caller(**_kwargs):
-        gen = responses.pop(0)
-        async for e in gen:
+        nonlocal calls
+        calls += 1
+        async for e in stream_propose():
             yield e
 
     agent_module.set_stream_caller(caller)
     try:
         with client.stream("POST", "/api/chat/stream",
-                           json={"message": "go", "file_ids": [file_id], "session_id": "sse-name"}) as r:
+                           json={"message": "汇总", "file_ids": [file_id], "session_id": "sse-graph"}) as r:
             body = "".join(r.iter_text())
     finally:
         agent_module.set_stream_caller(None)
 
     events = _parse_sse(body)
+    assert calls == 1, "提交图后必须停住，不再问模型"
+    stage_change = next(e for e in events if e["type"] == "stage_change")
+    assert stage_change["stage"] == "awaiting_approval"
+
     done = next(e for e in events if e["type"] == "done")
-    # output_id is gone; output_name is None because the only tool call errored out.
+    assert done["stage"] == "awaiting_approval"
+    assert [n["id"] for n in done["graph"]["nodes"]] == ["n_up", "n_sum"]
+    assert done["reply"] == "这样处理"
     assert "output_id" not in done
-    assert "output_name" in done
-    assert "sheets" in done
+    assert done["tool_calls"][-1]["tool"] == META_TOOL_NAME
+    assert done["tool_calls"][-1]["status"] == "ok"
+
+    # Persisted, so a reload can redraw the canvas.
+    workflow = client.get("/api/sessions/sse-graph/workflow").json()
+    assert workflow["stage"] == "awaiting_approval"
+    assert [n["seq"] for n in workflow["nodes"]] == [1, 2]
 
 
 def test_chat_stream_disconnect_stops_early(client: TestClient) -> None:
@@ -457,13 +479,13 @@ def _tool_round(block_id: str, name: str, tool_input: dict[str, Any]) -> AsyncIt
     return gen()
 
 
-def test_tool_end_carries_the_output_id_the_client_needs(
+def test_rejected_tool_call_produces_no_output(
     app_with_data_dir, client: TestClient, sample_file: Path, caplog,
 ) -> None:
-    """A real export through the real handler: `tool_end.output_id` must be usable.
+    """A directly-called export is rejected, so no output_id can leak to the client.
 
-    Without it the client cannot reopen the file it just produced — the tab either
-    spins forever (refId "") or never appears at all.
+    (Execution — and therefore real outputs — belongs to the execution engine;
+    this loop only compiles the graph.)
     """
     _, tmp_path = app_with_data_dir
     file_id = "file-out"
@@ -480,7 +502,7 @@ def test_tool_end_carries_the_output_id_the_client_needs(
             size_bytes=sample_file.stat().st_size,
             sha256="x",
             inspection={"filename": "sample.xlsx", "file_type": "xlsx", "sheets": []},
-            created_at=_dt.datetime.utcnow().isoformat(),
+            created_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
         ),
     )
 
@@ -516,21 +538,20 @@ def test_tool_end_carries_the_output_id_the_client_needs(
     export_end = next(
         e for e in events if e["type"] == "tool_end" and e["name"] == "tablex_export"
     )
-    assert export_end["status"] == "ok"
-    assert export_end["output_name"] == "清洗后数据"
-    assert export_end["output_id"], "客户端没有 id 就打不开这个文件"
+    assert export_end["status"] == "error"
+    assert export_end["output_id"] is None
+    assert export_end["output_name"] is None
 
-    # And the id actually resolves to bytes, which is what the preview does next.
-    downloaded = client.get(f"/api/outputs/{export_end['output_id']}")
-    assert downloaded.status_code == 200
-    assert downloaded.content
+    done = next(e for e in events if e["type"] == "done")
+    assert done["output_name"] is None
+    assert done["sheets"] == []  # nothing was loaded or produced
 
     # The tool log is the only trace left after the fact, so it has to say which
     # conversation (and, where the tool takes one, which file) the call belonged to.
     def _tool_lines(name: str) -> list[str]:
         return [r.getMessage() for r in caplog.records if f"tool tablex_{name} " in r.getMessage()]
 
-    assert _tool_lines("export"), "every tool run must leave a log line"
+    assert _tool_lines("export"), "every tool call must leave a log line"
     assert "session=sse-out" in _tool_lines("export")[-1]
     # tablex_export takes only output_name; tablex_upload is the one carrying file_id.
     assert f"file={file_id}" in _tool_lines("upload")[-1]

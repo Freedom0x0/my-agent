@@ -19,12 +19,14 @@ from ..db import (
     get_file,
     get_output,
     get_session_detail,
+    get_workflow,
     init_db,
     insert_file,
     insert_output,
     list_sessions,
 )
 from ..logging_setup import get_ring
+from ..mcp.workflow import public_graph
 from ..domain._archive.operations import (
     ConfirmationRequired,
     InvalidPlanError,
@@ -350,5 +352,20 @@ def create_router() -> APIRouter:
         if detail is None:
             raise _build_error("session_not_found", f"未找到会话 {session_id}", 404)
         return detail
+
+    @router.get(
+        "/sessions/{session_id}/workflow",
+        responses={404: {"model": ErrorResponse}},
+    )
+    async def get_session_workflow(session_id: str) -> dict[str, Any]:
+        """The session's workflow graph + stage (nodes carry their derived seq)."""
+        saved = get_workflow(_db_path(), session_id)
+        if saved is None:
+            raise _build_error("workflow_not_found", f"未找到工作流 {session_id}", 404)
+        return {
+            "session_id": session_id,
+            "stage": saved["stage"],
+            **public_graph(saved["graph"]),
+        }
 
     return router

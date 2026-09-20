@@ -10,7 +10,7 @@ import httpx
 
 from ..config import get_settings
 from ..logging_setup import current_request_id, log_event
-from .handlers import HANDLERS, truncate_result, validate_tool_input
+from .handlers import HANDLERS, truncate_result
 from .prompts import SYSTEM_PROMPT
 from .schemas import (
     MAX_MODEL_SECONDS,
@@ -19,9 +19,13 @@ from .schemas import (
     ToolResult,
 )
 from .session import Session
-from .tools import TABLEX_TOOL_DEFINITIONS
-
-logger = logging.getLogger(__name__)
+from .workflow import (
+    META_TOOL_NAME,
+    WorkflowError,
+    agent_tool_definitions,
+    normalize_graph,
+    render_graph_context,
+)
 
 
 class ChatError(RuntimeError):
@@ -44,6 +48,8 @@ class ChatResponse:
         output_name: str | None = None,
         sheets: list[str] | None = None,
         error_code: str | None = None,
+        stage: str = "drafting",
+        graph: dict[str, Any] | None = None,
     ):
         self.reply = reply
         self.tool_calls = tool_calls
@@ -51,6 +57,8 @@ class ChatResponse:
         self.output_name = output_name
         self.sheets = sheets or []
         self.error_code = error_code
+        self.stage = stage
+        self.graph = graph
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +67,8 @@ class ChatResponse:
             "output_id": self.output_id,
             "output_name": self.output_name,
             "sheets": self.sheets,
+            "stage": self.stage,
+            "graph": self.graph,
             **({"error_code": self.error_code} if self.error_code else {}),
         }
 
@@ -345,14 +355,154 @@ def _ui_append(
     })
 
 
-def _build_first_user_text(user_message: str, session: Session) -> str:
-    if not session.files:
-        return user_message
-    lines = [user_message, "", "## 可用文件"]
-    for fid, info in session.files.items():
-        name = info.get("original_name", "?")
-        lines.append(f"- file_id=`{fid}` 名称=`{name}`")
+def _build_user_text(user_message: str, session: Session) -> str:
+    """First message carries the available files; every message carries the graph."""
+    lines = [user_message]
+    if not session.messages and session.files:
+        lines += ["", "## 可用文件"]
+        for fid, info in session.files.items():
+            name = info.get("original_name", "?")
+            lines.append(f"- file_id=`{fid}` 名称=`{name}`")
+    if session.graph:
+        lines += ["", render_graph_context(session.graph)]
     return "\n".join(lines)
+
+
+def _handle_tool_call(session: Session, tool_call: ToolCall) -> tuple[ToolResult, bool]:
+    """Handle one tool_use block. Returns (result, graph_submitted).
+
+    The tablex_* tools are node types, not actions: calling one directly is a
+    mistake that gets handed back to the model. `tablex_propose_workflow` is the
+    only executable action — it stores the graph and the caller stops the loop.
+
+    Never raises: every failure becomes a failed ToolResult the model can fix.
+    """
+    started = time.perf_counter()
+    submitted = False
+    if tool_call.name == META_TOOL_NAME:
+        try:
+            session.graph = normalize_graph(tool_call.input)
+            session.stage = "awaiting_approval"
+            submitted = True
+            result = ToolResult(
+                success=True,
+                summary="工作流已生成，等待用户批准。",
+                data={"stage": session.stage},
+            )
+        except WorkflowError as exc:
+            result = ToolResult(success=False, summary="工作流图不合法", error=str(exc)[:300])
+    elif tool_call.name in HANDLERS:
+        result = ToolResult(
+            success=False,
+            summary="工具不能直接调用",
+            error=(
+                f"{tool_call.name} 只能作为工作流图的节点类型，不会被执行。"
+                f"请用 {META_TOOL_NAME} 提交完整的工作流图。"
+            ),
+        )
+    else:
+        result = ToolResult(success=False, summary="未知工具", error=f"未知工具: {tool_call.name}")
+
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    log_event(
+        logging.INFO if result.success else logging.WARNING,
+        _tool_log_line(session, tool_call, "ok" if result.success else "error", duration_ms, result.summary),
+        request_id=getattr(session, "request_id", None),
+    )
+    return result, submitted
+
+
+def _start_turn(session: Session, store: Any) -> None:
+    """Reset this turn's stage, keeping SQLite in agreement with memory.
+
+    `drafting` is a transient "the model is thinking" value and is never
+    persisted. A graph that already exists is still unapproved, so the session's
+    stable stage is `awaiting_approval` — restore it and write it back here,
+    *before* the turn runs.
+
+    Doing it at entry rather than on each exit is deliberate: the response is
+    built from `session.stage` on the way out, so a turn that ends without a new
+    graph (`end_turn` text-only, `max_tokens`, unknown stop reason,
+    `too_many_steps`, or an unexpected exception) would otherwise report
+    `drafting` while the DB still said `awaiting_approval` — and a reload would
+    silently flip it back to a stage the user may have just asked to change.
+    """
+    if session.graph is None:
+        session.stage = "drafting"
+        return
+    session.stage = "awaiting_approval"
+    store.persist_workflow(session)
+
+
+def _run_tool_round(
+    session: Session, content_blocks: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], bool]:
+    """Handle every tool_use block in one model round.
+
+    Returns (tool_results, graph_submitted). No handler is ever executed.
+    """
+    tool_results: list[dict[str, Any]] = []
+    submitted = False
+    for block in content_blocks:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        tool_call = ToolCall(
+            tool_use_id=block.get("id", ""),
+            name=block.get("name", ""),
+            input=block.get("input") or {},
+        )
+        result, call_submitted = _handle_tool_call(session, tool_call)
+        submitted = submitted or call_submitted
+        tool_results.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": tool_call.tool_use_id,
+                "content": truncate_result(result),
+            }
+        )
+        session.tool_calls_log.append(
+            {
+                "tool": tool_call.name,
+                "status": "ok" if result.success else "error",
+                "summary": result.summary,
+            }
+        )
+    return tool_results, submitted
+
+
+def _make_response(session: Session, reply: str, error_code: str | None = None) -> ChatResponse:
+    return ChatResponse(
+        reply=reply,
+        tool_calls=list(session.tool_calls_log),
+        output_id=session.output_id,
+        output_name=_last_output_name(session),
+        sheets=list(session.tables.keys()),
+        error_code=error_code,
+        stage=session.stage,
+        graph=session.graph,
+    )
+
+
+def _finish_submitted(
+    session: Session,
+    store: Any,
+    user_message: str,
+    content_blocks: list[dict[str, Any]],
+    tool_log_start: int,
+) -> str:
+    """Close the turn on a submitted graph: persist it and stop — nothing executes.
+
+    The trailing assistant message keeps the history alternating, so the next
+    turn's user message doesn't follow the tool_result user message directly.
+    """
+    store.persist_workflow(session)
+    text = _extract_text(content_blocks) or "工作流图已生成，等待你批准。"
+    session.messages.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
+    session.touch()
+    _ui_append(session, "user", user_message)
+    _ui_append(session, "assistant", text, tool_calls=session.tool_calls_log[tool_log_start:])
+    store.persist_messages(session)
+    return text
 
 
 def process_chat(
@@ -364,42 +514,16 @@ def process_chat(
     settings: Any | None = None,
     chat_caller: ChatCaller | None = None,
 ) -> ChatResponse:
-    """Run one user turn through the agent loop and return the final response."""
-    from .session import get_session_store  # local import for testability
+    """Run one user turn through the agent loop and return the final response.
 
-    if not user_message.strip():
-        raise ChatError("invalid_request", "消息不能为空")
-
-    settings = settings or get_settings()
-    store = store or get_session_store()
-    session = store.get_or_create(session_id)
-    session.request_id = current_request_id()
+    The model *compiles* a workflow graph (`tablex_propose_workflow`); no node is
+    executed here. Execution happens after the user approves, in the execution
+    engine.
+    """
+    session, store, settings = _process_chat_setup(
+        session_id, user_message, file_ids, store, settings,
+    )
     caller = chat_caller or _default_chat_caller
-
-    # Register any new file paths (tables still lazy — handlers load via tablex_upload).
-    if file_ids:
-        from ..db import get_file
-
-        db_path = settings_data_dir(settings) / "metadata.db"
-        for fid in file_ids:
-            if fid in session.files:
-                continue
-            rec = get_file(db_path, fid)
-            if rec is None:
-                raise ChatError("file_not_found", f"未找到文件 {fid}")
-            session.files[fid] = {
-                "path": rec.stored_path,
-                "sha256": rec.sha256,
-                "original_name": rec.original_name,
-            }
-
-    if not settings.MODEL_BASE_URL or not settings.MODEL_API_KEY or not settings.MODEL_NAME:
-        raise ChatError("model_not_configured", "MODEL_BASE_URL / MODEL_API_KEY / MODEL_NAME 未配置")
-
-    # First user message carries file context so the agent knows which file_ids are valid.
-    is_first = not session.messages
-    content_text = _build_first_user_text(user_message, session) if is_first else user_message
-    session.messages.append({"role": "user", "content": content_text})
 
     tool_log_start = len(session.tool_calls_log)
 
@@ -408,7 +532,7 @@ def process_chat(
             try:
                 response = caller(
                     messages=session.messages,
-                    tools=TABLEX_TOOL_DEFINITIONS,
+                    tools=agent_tool_definitions(),
                     system=SYSTEM_PROMPT,
                     model=settings.MODEL_NAME,
                     base_url=settings.MODEL_BASE_URL,
@@ -433,13 +557,7 @@ def process_chat(
                 _ui_append(session, "user", user_message)
                 _ui_append(session, "assistant", text, tool_calls=session.tool_calls_log[tool_log_start:])
                 store.persist_messages(session)
-                return ChatResponse(
-                    reply=text,
-                    tool_calls=list(session.tool_calls_log),
-                    output_id=session.output_id,
-                    output_name=_last_output_name(session),
-                    sheets=list(session.tables.keys()),
-                )
+                return _make_response(session, text)
 
             if stop_reason == "max_tokens":
                 session.messages.append({"role": "assistant", "content": content_blocks})
@@ -451,69 +569,18 @@ def process_chat(
                     tool_calls=session.tool_calls_log[tool_log_start:],
                 )
                 store.persist_messages(session)
-                return ChatResponse(
-                    reply="模型输出过长，请简化需求",
-                    tool_calls=list(session.tool_calls_log),
-                    output_id=session.output_id,
-                    output_name=_last_output_name(session),
-                    sheets=list(session.tables.keys()),
-                    error_code="model_truncated",
-                )
+                return _make_response(session, "模型输出过长，请简化需求", error_code="model_truncated")
 
             if stop_reason == "tool_use":
                 session.messages.append({"role": "assistant", "content": content_blocks})
-                tool_results: list[dict[str, Any]] = []
-                for block in content_blocks:
-                    if not isinstance(block, dict) or block.get("type") != "tool_use":
-                        continue
-                    tool_call = ToolCall(
-                        tool_use_id=block.get("id", ""),
-                        name=block.get("name", ""),
-                        input=block.get("input") or {},
-                    )
-                    validation = validate_tool_input(tool_call.name, tool_call.input, session)
-                    tool_status = "ok"
-                    if not validation.ok:
-                        result = ToolResult(success=False, summary="参数校验失败", error=validation.error)
-                        tool_status = "error"
-                    else:
-                        tool_started = time.perf_counter()
-                        try:
-                            result = HANDLERS[tool_call.name].fn(tool_call, session)
-                            if not result.success:
-                                tool_status = "error"
-                        except Exception as exc:
-                            logger.exception("handler %s failed", tool_call.name)
-                            result = ToolResult(success=False, summary="执行失败", error=str(exc)[:300])
-                            tool_status = "error"
-                        finally:
-                            tool_duration_ms = int((time.perf_counter() - tool_started) * 1000)
-                            log_event(
-                                logging.INFO if tool_status == "ok" else logging.WARNING,
-                                _tool_log_line(session, tool_call, tool_status, tool_duration_ms, result.summary),
-                                request_id=getattr(session, "request_id", None),
-                            )
-
-                    result_text = truncate_result(result)
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_call.tool_use_id,
-                            "content": result_text,
-                        }
-                    )
-                    log_entry: dict[str, Any] = {
-                        "tool": tool_call.name,
-                        "status": "ok" if result.success else "error",
-                        "summary": result.summary,
-                    }
-                    if result.data and "output_id" in result.data:
-                        log_entry["output_id"] = result.data["output_id"]
-                    if result.data and "output_name" in result.data:
-                        log_entry["output_name"] = result.data["output_name"]
-                    session.tool_calls_log.append(log_entry)
+                tool_results, submitted = _run_tool_round(session, content_blocks)
                 session.messages.append({"role": "user", "content": tool_results})
                 session.touch()
+                if submitted:
+                    text = _finish_submitted(
+                        session, store, user_message, content_blocks, tool_log_start
+                    )
+                    return _make_response(session, text)
                 store.persist_messages(session)
                 continue
 
@@ -563,9 +630,10 @@ def _process_chat_setup(
     if not settings.MODEL_BASE_URL or not settings.MODEL_API_KEY or not settings.MODEL_NAME:
         raise ChatError("model_not_configured", "MODEL_BASE_URL / MODEL_API_KEY / MODEL_NAME 未配置")
 
-    is_first = not session.messages
-    content_text = _build_first_user_text(user_message, session) if is_first else user_message
-    session.messages.append({"role": "user", "content": content_text})
+    # The first message carries file context so the agent knows which file_ids are
+    # valid; every message carries the current graph.
+    session.messages.append({"role": "user", "content": _build_user_text(user_message, session)})
+    _start_turn(session, store)
 
     return session, store, settings
 
@@ -610,7 +678,7 @@ async def process_chat_stream(
         try:
             async for evt in caller(
                 messages=session.messages,
-                tools=TABLEX_TOOL_DEFINITIONS,
+                tools=agent_tool_definitions(),
                 system=SYSTEM_PROMPT,
                 model=settings.MODEL_NAME,
                 base_url=settings.MODEL_BASE_URL,
@@ -670,6 +738,8 @@ async def process_chat_stream(
                 "output_name": _last_output_name(session),
                 "sheets": list(session.tables.keys()),
                 "segments": segments,
+                "stage": session.stage,
+                "graph": session.graph,
             }
             return
 
@@ -705,6 +775,7 @@ async def process_chat_stream(
                 segments.append({"type": "text", "content": text})
             session.messages.append({"role": "assistant", "content": content_blocks})
             tool_results: list[dict[str, Any]] = []
+            submitted = False
             for block in content_blocks:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
@@ -713,35 +784,14 @@ async def process_chat_stream(
                     name=block.get("name", ""),
                     input=block.get("input") or {},
                 )
-                validation = validate_tool_input(tool_call.name, tool_call.input, session)
-                tool_status = "ok"
-                if not validation.ok:
-                    result = ToolResult(success=False, summary="参数校验失败", error=validation.error)
-                    tool_status = "error"
-                else:
-                    tool_started = time.perf_counter()
-                    try:
-                        result = HANDLERS[tool_call.name].fn(tool_call, session)
-                        if not result.success:
-                            tool_status = "error"
-                    except Exception as exc:
-                        logger.exception("handler %s failed", tool_call.name)
-                        result = ToolResult(success=False, summary="执行失败", error=str(exc)[:300])
-                        tool_status = "error"
-                    finally:
-                        tool_duration_ms = int((time.perf_counter() - tool_started) * 1000)
-                        log_event(
-                            logging.INFO if tool_status == "ok" else logging.WARNING,
-                            _tool_log_line(session, tool_call, tool_status, tool_duration_ms, result.summary),
-                            request_id=getattr(session, "request_id", None),
-                        )
+                result, call_submitted = _handle_tool_call(session, tool_call)
+                submitted = submitted or call_submitted
 
-                result_text = truncate_result(result)
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_call.tool_use_id,
-                        "content": result_text,
+                        "content": truncate_result(result),
                     }
                 )
                 log_entry: dict[str, Any] = {
@@ -749,10 +799,6 @@ async def process_chat_stream(
                     "status": "ok" if result.success else "error",
                     "summary": result.summary,
                 }
-                if result.data and "output_id" in result.data:
-                    log_entry["output_id"] = result.data["output_id"]
-                if result.data and "output_name" in result.data:
-                    log_entry["output_name"] = result.data["output_name"]
                 session.tool_calls_log.append(log_entry)
                 segments.append({
                     "type": "tool",
@@ -764,12 +810,46 @@ async def process_chat_stream(
                     "id": tool_call.tool_use_id,
                     "name": tool_call.name,
                     "summary": result.summary,
-                    "status": tool_status,
-                    "output_id": result.data.get("output_id") if isinstance(result.data, dict) else None,
-                    "output_name": result.data.get("output_name") if isinstance(result.data, dict) else None,
+                    "status": log_entry["status"],
+                    "output_id": None,
+                    "output_name": None,
                 }
             session.messages.append({"role": "user", "content": tool_results})
             session.touch()
+            if submitted:
+                # The graph is in — persist it and stop. Nothing executes.
+                store.persist_workflow(session)
+                if not text:
+                    text = "工作流图已生成，等待你批准。"
+                    segments.append({"type": "text", "content": text})
+                    yield {"type": "text", "delta": text}
+                session.messages.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
+                session.touch()
+                _ui_append(
+                    session,
+                    "user",
+                    user_message,
+                )
+                _ui_append(
+                    session,
+                    "assistant",
+                    text,
+                    tool_calls=session.tool_calls_log[tool_log_start:],
+                    segments=segments,
+                )
+                store.persist_messages(session)
+                yield {"type": "stage_change", "stage": session.stage}
+                yield {
+                    "type": "done",
+                    "reply": text,
+                    "tool_calls": list(session.tool_calls_log),
+                    "output_name": _last_output_name(session),
+                    "sheets": list(session.tables.keys()),
+                    "segments": segments,
+                    "stage": session.stage,
+                    "graph": session.graph,
+                }
+                return
             store.persist_messages(session)
             continue
 

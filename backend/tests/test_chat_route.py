@@ -112,18 +112,18 @@ def test_chat_route_returns_session_id_when_missing(client: TestClient, monkeypa
     assert body.get("session_id")
 
 
-def test_chat_route_full_flow_with_tool_calls(
+def test_chat_route_stores_the_graph_and_stops(
     app_with_data_dir, client: TestClient, sample_file: Path, monkeypatch
 ) -> None:
     _, tmp_path = app_with_data_dir
     file_id = _upload_file(client, sample_file)
 
-    # Plan: first response asks tablex_upload, second returns text reply.
-    from backend.app.mcp.tools import TABLEX_TOOL_DEFINITIONS
+    from backend.app.db import get_workflow
     from backend.app.mcp.session import get_session_store
+    from backend.app.mcp.workflow import META_TOOL_NAME
 
     store = get_session_store()
-    # pre-register file in session so handler finds it
+    # pre-register file in session so the graph's source node can reference it
     sess = store.get_or_create("flow")
     sess.files[file_id] = {
         "path": str(sample_file),
@@ -131,6 +131,13 @@ def test_chat_route_full_flow_with_tool_calls(
         "original_name": "sample.xlsx",
     }
 
+    graph = {
+        "nodes": [
+            {"id": "n_up", "label": "读取明细", "tool": "tablex_upload", "input": {"file_id": file_id}},
+            {"id": "n_sum", "label": "按部门汇总", "tool": "tablex_group_summary", "input": {"group_by": ["部门"], "metrics": {"金额": ["sum"]}}},
+        ],
+        "edges": [{"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"}],
+    }
     responses = [
         {
             "stop_reason": "tool_use",
@@ -139,8 +146,10 @@ def test_chat_route_full_flow_with_tool_calls(
             ],
         },
         {
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "文件已加载"}],
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "tool_use", "id": "tu-2", "name": META_TOOL_NAME, "input": graph},
+            ],
         },
     ]
 
@@ -148,14 +157,18 @@ def test_chat_route_full_flow_with_tool_calls(
 
     response = client.post(
         "/api/chat",
-        json={"message": "加载并检查", "file_ids": [file_id], "session_id": "flow"},
+        json={"message": "加载并汇总", "file_ids": [file_id], "session_id": "flow"},
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["reply"] == "文件已加载"
-    assert any(tc["tool"] == "tablex_upload" for tc in body["tool_calls"])
-    # Tables should now be in session
-    assert any(k.startswith(file_id) for k in sess.tables.keys())
+    assert body["stage"] == "awaiting_approval"
+    assert [n["id"] for n in body["graph"]["nodes"]] == ["n_up", "n_sum"]
+    assert [tc["status"] for tc in body["tool_calls"]] == ["error", "ok"]
+
+    # Nothing ran: the file was never loaded into the session.
+    assert sess.tables == {}
+    # The graph is persisted, not just held in memory.
+    assert get_workflow(tmp_path / "runtime" / "metadata.db", "flow")["stage"] == "awaiting_approval"
 
 
 def test_chat_route_handles_chat_error(

@@ -3,8 +3,8 @@
 - Spins up FastAPI TestClient.
 - Uploads fixtures/expenses_and_budget.xlsx via POST /api/files.
 - Drives POST /api/chat with a scripted MiniMax response queue (model is mocked).
-- Verifies tablex_* tool calls are executed and /api/outputs/{id} is downloadable.
-- Verifies session messages are persisted to SQLite (plan §1.2.3 simplified scheme).
+- Verifies the model *compiles* a workflow graph, that nothing is executed, and
+  that the graph + stage are readable back over HTTP and from SQLite.
 """
 from __future__ import annotations
 
@@ -16,10 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.config import get_settings
-from backend.app.db import get_session_messages, init_db
+from backend.app.db import get_session_messages, get_workflow, init_db
 from backend.app.main import create_app
 from backend.app.mcp import agent as agent_module
-from backend.app.mcp.session import reset_session_store
+from backend.app.mcp.session import get_session_store, reset_session_store
+from backend.app.mcp.workflow import META_TOOL_NAME
 
 
 FIXTURES = Path(__file__).resolve().parent.parent.parent / "fixtures"
@@ -60,44 +61,39 @@ def _response(content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]
     return {"stop_reason": stop_reason, "content": content}
 
 
-def test_e2e_chat_full_flow(client: TestClient) -> None:
-    """upload -> chat (mocked) -> tool_use processed -> export -> download."""
+def _workflow_graph(file_id: str) -> dict[str, Any]:
+    return {
+        "nodes": [
+            {"id": "n_up", "label": "读取收支明细", "tool": "tablex_upload", "input": {"file_id": file_id}},
+            {
+                "id": "n_sum",
+                "label": "按部门汇总",
+                "tool": "tablex_group_summary",
+                "input": {"group_by": ["部门"], "metrics": {"金额": ["sum"]}, "output_sheet": "汇总结果"},
+            },
+        ],
+        "edges": [{"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"}],
+    }
+
+
+def test_e2e_chat_compiles_a_graph_and_stops_for_approval(client: TestClient) -> None:
+    """upload -> chat (mocked) -> graph stored, stage awaiting_approval, nothing ran."""
     source = FIXTURES / "expenses_and_budget.xlsx"
     assert source.exists(), f"fixture missing: {source}"
 
     file_id = _upload(client, source)
 
-    # Scripted MiniMax replies: upload -> inspect -> normalize -> group_summary -> export -> text.
+    # The model first tries to call a node-type tool directly (rejected), then
+    # submits the graph. The turn must stop right there.
     responses = [
         _response(
             [_tool_use_block("tu-1", "tablex_upload", {"file_id": file_id})],
             stop_reason="tool_use",
         ),
         _response(
-            [_tool_use_block("tu-2", "tablex_inspect", {"file_id": file_id})],
+            [_tool_use_block("tu-2", META_TOOL_NAME, _workflow_graph(file_id))],
             stop_reason="tool_use",
         ),
-        _response(
-            [_tool_use_block(
-                "tu-3", "tablex_normalize",
-                {"file_id": file_id, "sheet": "收支明细", "columns": ["金额"], "target_type": "number"},
-            )],
-            stop_reason="tool_use",
-        ),
-        _response(
-            [_tool_use_block(
-                "tu-4", "tablex_group_summary",
-                {
-                    "file_id": file_id, "sheet": "收支明细",
-                    "group_by": ["部门"],
-                    "metrics": {"金额": ["sum"]},
-                    "output_sheet": "汇总结果",
-                },
-            )],
-            stop_reason="tool_use",
-        ),
-        _response([_tool_use_block("tu-5", "tablex_export", {})], stop_reason="tool_use"),
-        _response([_text_block("处理完成")], stop_reason="end_turn"),
     ]
 
     def scripted_caller(**_kwargs: Any) -> dict[str, Any]:
@@ -115,28 +111,66 @@ def test_e2e_chat_full_flow(client: TestClient) -> None:
     assert chat_resp.status_code == 200, chat_resp.text
     body = chat_resp.json()
     assert body["error_code"] is None
-    assert body["reply"] == "处理完成"
     assert body["session_id"] == "e2e"
+    assert body["stage"] == "awaiting_approval"
+    assert [n["id"] for n in body["graph"]["nodes"]] == ["n_up", "n_sum"]
 
-    # All five tool calls should appear, in order.
-    tool_calls = body["tool_calls"]
-    tools = [tc["tool"] for tc in tool_calls]
-    assert tools == [
-        "tablex_upload",
-        "tablex_inspect",
-        "tablex_normalize",
-        "tablex_group_summary",
-        "tablex_export",
+    # Direct call rejected, graph submission accepted — and nothing was executed.
+    assert [(tc["tool"], tc["status"]) for tc in body["tool_calls"]] == [
+        ("tablex_upload", "error"),
+        (META_TOOL_NAME, "ok"),
     ]
-    assert all(tc["status"] == "ok" for tc in tool_calls)
+    assert body["output_id"] is None
 
-    # Output file is downloadable.
-    output_id = body["output_id"]
-    assert output_id
-    download = client.get(f"/api/outputs/{output_id}")
-    assert download.status_code == 200
-    assert download.headers["content-type"].startswith("application/vnd.openxmlformats")
-    assert len(download.content) > 0
+    # The graph is the truth: it's readable back over HTTP with its derived seq.
+    workflow = client.get("/api/sessions/e2e/workflow").json()
+    assert workflow["stage"] == "awaiting_approval"
+    assert [n["seq"] for n in workflow["nodes"]] == [1, 2]
+    assert workflow["nodes"][1]["label"] == "按部门汇总"
+    assert workflow["edges"] == [{"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"}]
+
+    # And in SQLite.
+    db_path = Path(get_settings().APP_DATA_DIR) / "metadata.db"
+    saved = get_workflow(db_path, "e2e")
+    assert saved is not None and saved["stage"] == "awaiting_approval"
+
+
+def test_e2e_stage_agrees_between_response_memory_and_db(client: TestClient) -> None:
+    """Regression: a text-only follow-up turn must not leave a stale stage in SQLite.
+
+    The graph is still unapproved, so `awaiting_approval` is the truth — if the
+    turn reported `drafting` while the DB said `awaiting_approval`, the approval
+    subtask would act on a graph the user may have just asked to change.
+    """
+    file_id = _upload(client, FIXTURES / "expenses_and_budget.xlsx")
+
+    responses = [
+        _response([_tool_use_block("tu-1", META_TOOL_NAME, _workflow_graph(file_id))], stop_reason="tool_use"),
+        _response([_text_block("还有什么要改的吗？")], stop_reason="end_turn"),
+    ]
+    agent_module.set_chat_caller(lambda **_kw: responses.pop(0))
+    try:
+        first = client.post(
+            "/api/chat",
+            json={"message": "按部门汇总", "file_ids": [file_id], "session_id": "stage-drift"},
+        ).json()
+        second = client.post(
+            "/api/chat",
+            json={"message": "这张图是什么意思？", "file_ids": [file_id], "session_id": "stage-drift"},
+        ).json()
+    finally:
+        agent_module.set_chat_caller(None)
+
+    assert first["stage"] == "awaiting_approval"
+    assert second["stage"] == "awaiting_approval"
+    assert second["reply"] == "还有什么要改的吗？"
+    # Both readers agree, and a reloaded session does too.
+    assert client.get("/api/sessions/stage-drift/workflow").json()["stage"] == "awaiting_approval"
+    assert get_session_store().get("stage-drift").stage == "awaiting_approval"
+
+
+def test_e2e_workflow_route_404s_before_a_graph_exists(client: TestClient) -> None:
+    assert client.get("/api/sessions/no-graph-yet/workflow").status_code == 404
 
 
 def test_e2e_chat_persists_messages_to_sqlite(client: TestClient) -> None:

@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   ui_messages_json TEXT,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS workflows (
+  session_id TEXT PRIMARY KEY,
+  graph_json TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -239,6 +245,38 @@ def get_output(db_path: Path, output_id: str) -> OutputRecord | None:
         created_at=row["created_at"],
         output_name=name,
     )
+
+
+# ----- workflow graph persistence (the graph is the source of truth) -----
+
+
+def save_workflow(db_path: Path, session_id: str, graph: dict[str, Any], stage: str) -> None:
+    """Upsert one session's workflow graph + stage."""
+    updated_at = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO workflows (session_id, graph_json, stage, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET graph_json = excluded.graph_json, "
+            "stage = excluded.stage, updated_at = excluded.updated_at",
+            (session_id, json.dumps(graph, ensure_ascii=False), stage, updated_at),
+        )
+        conn.commit()
+
+
+def get_workflow(db_path: Path, session_id: str) -> dict[str, Any] | None:
+    """Read back `{graph, stage}` for a session, or None when it has no graph."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT graph_json, stage FROM workflows WHERE session_id = ?", (session_id,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        graph = json.loads(row["graph_json"])
+    except (TypeError, ValueError):
+        return None
+    return {"graph": graph, "stage": row["stage"]}
 
 
 # ----- session messages persistence (debug-only; not reloaded on startup) -----

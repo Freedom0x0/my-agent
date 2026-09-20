@@ -18,8 +18,10 @@ class Session:
     """One conversation's mutable state.
 
     - `tables`: current DataFrames keyed by SheetRef (`<file_id>::<sheet>`). NOT serialized.
+    - `graph` + `stage`: the workflow graph and where the session sits in the state
+      machine. Cached here, persisted to SQLite (the graph is the truth).
     - `messages`: Anthropic Messages API history.
-    - `tool_calls_log`: list of `{tool, status, summary, output_id}` for the UI.
+    - `tool_calls_log`: list of `{tool, status, summary}` for the UI.
     - `audit_events`: list of AuditEvent produced by handlers.
     - `lock`: serializes concurrent requests for the same session.
     """
@@ -28,6 +30,10 @@ class Session:
         self.session_id = session_id
         self.files: dict[str, dict[str, Any]] = {}  # file_id -> {path, sha256, original_name}
         self.tables: dict[str, pd.DataFrame] = {}
+        # The workflow graph is the truth and lives in SQLite; this is a cache of
+        # it (`None` until the model proposes one). `stage` is the state machine.
+        self.graph: dict[str, Any] | None = None
+        self.stage: str = "drafting"
         self.messages: list[dict[str, Any]] = []
         # UI-shaped transcript (role/content/tool_calls/segments) rendered by the
         # client. Persisted to sessions.ui_messages_json so a reload rebuilds the
@@ -78,8 +84,20 @@ class SessionStore:
             if existing:
                 self._sessions.pop(session_id, None)
             session = Session(session_id, self.output_dir)
+            self._load_workflow(session)
             self._sessions[session_id] = session
             return session
+
+    def _load_workflow(self, session: Session) -> None:
+        """Rehydrate graph + stage after an eviction or a process restart."""
+        if self.db_path is None:
+            return
+        from ..db import get_workflow
+
+        saved = get_workflow(self.db_path, session.session_id)
+        if saved:
+            session.graph = saved["graph"]
+            session.stage = saved["stage"]
 
     def get(self, session_id: str) -> Session | None:
         with self._lock:
@@ -116,6 +134,14 @@ class SessionStore:
             list(session.messages),
             ui_messages=list(session.ui_messages),
         )
+
+    def persist_workflow(self, session: Session) -> None:
+        """Write the session's graph + stage to SQLite. No-op without a graph."""
+        if self.db_path is None or session.graph is None:
+            return
+        from ..db import save_workflow
+
+        save_workflow(self.db_path, session.session_id, session.graph, session.stage)
 
 
 # Module-level singleton; the FastAPI app wires the output_dir at startup.
