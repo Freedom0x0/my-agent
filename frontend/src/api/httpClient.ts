@@ -7,3 +7,4 @@ export { ApiError } from "./http";
 export type { RequestOptions } from "./http";
 export { chatStream, readSseStream } from "./chat";
 export type { StreamEvent, StreamToolCall, StreamSegment } from "./chat";
+export type { ExecuteEvent } from "./sessions";

@@ -198,6 +198,14 @@ def _build_output(
     """
     data = result.data or {}
 
+    sheet = data.get("output_sheet")
+    if isinstance(sheet, str) and sheet in tables:
+        # A transform may also persist a convenience workbook (for example
+        # tablex_join), but graph edges must consume its table result. The
+        # final export node has no output_sheet and therefore still becomes a
+        # file artifact below.
+        return _table_artifact(tables[sheet], session_id, node_id)
+
     output_id = data.get("output_id")
     if output_id:
         return {
@@ -205,10 +213,6 @@ def _build_output(
             "ref": f"outputs/{output_id}.xlsx",
             "name": data.get("output_name"),
         }
-
-    sheet = data.get("output_sheet")
-    if isinstance(sheet, str) and sheet in tables:
-        return _table_artifact(tables[sheet], session_id, node_id)
 
     sheets = data.get("sheets")
     if isinstance(sheets, list) and sheets and isinstance(sheets[0], str) and sheets[0] in tables:
@@ -318,11 +322,16 @@ def mark_stale(graph: dict[str, Any], node_id: str) -> list[str]:
     return sorted(affected)
 
 
-def _is_reusable(node: dict[str, Any]) -> bool:
+def _is_reusable(node: dict[str, Any], *, has_downstream: bool = False) -> bool:
     if node.get("status") != "ok":
         return False
     output = node.get("output") or {}
     if not output.get("ref"):
+        return False
+    if has_downstream and output.get("kind") != "table":
+        # Older executions could cache transform nodes such as tablex_join as
+        # files. Files cannot be materialized into downstream table bindings,
+        # so rerun the node once under the current artifact contract.
         return False
     if output.get("kind") == "table":
         return _abs_ref(output["ref"]).exists()
@@ -352,8 +361,10 @@ def _execute_sync(
     nodes = {n["id"]: n for n in graph["nodes"]}
     order = topo_order(graph)
     preds: dict[str, list[str]] = {nid: [] for nid in nodes}
+    nodes_with_downstream: set[str] = set()
     for edge in graph["edges"]:
         preds[edge["to_node"]].append(edge["from_node"])
+        nodes_with_downstream.add(edge["from_node"])
 
     session.pause_requested = False
     session.stage = "executing"
@@ -365,7 +376,11 @@ def _execute_sync(
     to_run: set[str] = set()
     for nid in order:
         node = nodes[nid]
-        if _is_reusable(node):
+        # Cache validity is transitive: a downstream file/table is only valid
+        # when every upstream node is itself being reused. Without this check,
+        # an export can remain cached while its input table was recomputed.
+        upstreams_reused = all(pred not in to_run and status.get(pred) == "ok" for pred in preds[nid])
+        if upstreams_reused and _is_reusable(node, has_downstream=nid in nodes_with_downstream):
             node["cached"] = True
             status[nid] = "ok"
             emit({"type": "node_end", "node_id": nid, "status": "ok",

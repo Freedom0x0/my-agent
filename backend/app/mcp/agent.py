@@ -463,9 +463,12 @@ def _handle_tool_call(session: Session, tool_call: ToolCall) -> tuple[ToolResult
         result = ToolResult(success=False, summary="未知工具", error=f"未知工具: {tool_call.name}")
 
     duration_ms = int((time.perf_counter() - started) * 1000)
+    log_summary = result.summary
+    if not result.success and result.error:
+        log_summary = f"{result.summary}: {result.error}"
     log_event(
         logging.INFO if result.success else logging.WARNING,
-        _tool_log_line(session, tool_call, "ok" if result.success else "error", duration_ms, result.summary),
+        _tool_log_line(session, tool_call, "ok" if result.success else "error", duration_ms, log_summary),
         request_id=getattr(session, "request_id", None),
     )
     return result, submitted

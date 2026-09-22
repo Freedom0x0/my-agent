@@ -1,9 +1,11 @@
 import { Fragment } from "react";
+import { DownloadOutlined } from "@ant-design/icons";
 
 import { COLUMN_PARAMS, firstUpstream, nodeInput, nodeRef, sourceOfParam } from "../../domain/graph";
 import type { FileItem } from "../../domain/models";
 import type { Graph, GraphNode } from "../../domain/graph";
 import { useAppStore } from "../../hooks/useAppStore";
+import { api } from "../../api";
 
 /**
  * Right-pane detail for the selected node. The two things it must do beyond
@@ -161,9 +163,28 @@ function NodeOutputView({ node }: { node: GraphNode }) {
   if (out.kind === "text") {
     return <div className="node-output-text" data-testid="node-output-text">{out.text ?? out.ref ?? ""}</div>;
   }
+  const outputId = outputIdFromRef(out.ref);
+  if (out.kind === "file" && outputId) {
+    return (
+      <a
+        className="node-ref node-output-file"
+        data-testid="node-output-file"
+        href={api.downloadUrl(outputId)}
+        download={out.name ?? undefined}
+      >
+        <DownloadOutlined /> {out.name ?? outputId}
+      </a>
+    );
+  }
   return (
     <span className="node-ref" data-testid="node-output-file">
       📄 {out.name ?? out.ref ?? out.kind}
     </span>
   );
+}
+
+function outputIdFromRef(ref: string | null | undefined): string | null {
+  if (!ref) return null;
+  const match = /^outputs\/([^/]+)\.xlsx$/.exec(ref);
+  return match?.[1] ?? null;
 }

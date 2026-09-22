@@ -55,10 +55,16 @@ def test_normalize_fills_backend_owned_fields() -> None:
 
 
 def test_normalize_drops_duplicate_edges() -> None:
-    graph = _graph(edges=[
-        {"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"},
-        {"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"},
-    ])
+    graph = _graph(
+        nodes=[
+            {"id": "n_up", "label": "读取收支明细", "tool": "tablex_upload", "input": {"file_id": "f1"}},
+            {"id": "n_sum", "label": "按部门汇总", "tool": "tablex_group_summary", "input": {"group_by": ["部门"]}},
+        ],
+        edges=[
+            {"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"},
+            {"from_node": "n_up", "to_node": "n_sum", "to_param": "sheet"},
+        ],
+    )
     assert len(graph["edges"]) == 1
 
 
@@ -100,6 +106,20 @@ def test_normalize_rejects_cycle() -> None:
                 {"from_node": "n_sum", "to_node": "n_up", "to_param": "sheet"},
             ]
         )
+
+
+def test_normalize_rejects_non_source_node_without_inbound_edge() -> None:
+    with pytest.raises(WorkflowError) as exc_info:
+        normalize_graph({
+            "nodes": [
+                {"id": "n_up", "label": "读取预算", "tool": "tablex_upload", "input": {"file_id": "f1"}},
+                {"id": "n_export", "label": "导出预算", "tool": "tablex_export", "input": {"output_name": "预算"}},
+            ],
+            "edges": [],
+        })
+
+    assert "n_export" in str(exc_info.value)
+    assert "入边" in str(exc_info.value)
 
 
 # ----- seq: derived, deterministic -----

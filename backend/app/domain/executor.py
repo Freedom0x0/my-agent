@@ -231,9 +231,11 @@ def _apply_filter(df: pd.DataFrame, op: FilterOperation) -> pd.DataFrame:
 
 
 def _agg_value(series: pd.Series, func: str) -> Any:
+    if func == "count":
+        return int(series.dropna().astype(str).str.strip().astype(bool).sum())
     numeric = series.apply(_to_number).dropna()
     if numeric.empty:
-        return 0 if func == "count" else None
+        return None
     if func == "sum":
         return float(numeric.sum())
     if func == "mean":
@@ -242,8 +244,6 @@ def _agg_value(series: pd.Series, func: str) -> Any:
         return float(numeric.min())
     if func == "max":
         return float(numeric.max())
-    if func == "count":
-        return int(series.dropna().astype(str).str.strip().astype(bool).sum())
     return None
 
 

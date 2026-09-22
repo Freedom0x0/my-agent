@@ -15,6 +15,8 @@ const hoisted = vi.hoisted(() => ({
   chatStream: vi.fn(),
   readSseStream: vi.fn(),
   getWorkflow: vi.fn(),
+  executeWorkflow: vi.fn(),
+  pauseWorkflow: vi.fn(),
 }));
 
 vi.mock("../api/httpClient", async () => {
@@ -23,7 +25,12 @@ vi.mock("../api/httpClient", async () => {
   );
   return {
     ...actual,
-    api: { ...actual.api, getWorkflow: hoisted.getWorkflow },
+    api: {
+      ...actual.api,
+      getWorkflow: hoisted.getWorkflow,
+      executeWorkflow: hoisted.executeWorkflow,
+      pauseWorkflow: hoisted.pauseWorkflow,
+    },
     chatStream: hoisted.chatStream,
     readSseStream: hoisted.readSseStream,
   };
@@ -96,6 +103,8 @@ function seedGraph(extra: Partial<ReturnType<typeof useAppStore.getState>> = {})
     chatUnread: false,
     messages: [],
     files: [],
+    executeController: null,
+    pauseRequested: false,
     ...extra,
   } as Partial<ReturnType<typeof useAppStore.getState>>);
 }
@@ -106,6 +115,8 @@ beforeEach(() => {
   hoisted.getWorkflow.mockRejectedValue(new ApiError({ status: 404, errorCode: "workflow_not_found", message: "session has no workflow" }));
   hoisted.chatStream.mockResolvedValue({} as ReadableStreamDefaultReader<Uint8Array>);
   hoisted.readSseStream.mockResolvedValue(undefined);
+  hoisted.executeWorkflow.mockResolvedValue({} as ReadableStreamDefaultReader<Uint8Array>);
+  hoisted.pauseWorkflow.mockResolvedValue({ session_id: "s1", stage: "executing", pause_requested: true });
   useAppStore.setState({
     currentSessionId: null,
     status: "idle",
@@ -118,6 +129,8 @@ beforeEach(() => {
     rightPanel: "file",
     chatUnread: false,
     error: null,
+    executeController: null,
+    pauseRequested: false,
     sendMessage: realSendMessage,
   } as Partial<ReturnType<typeof useAppStore.getState>>);
 });
@@ -289,14 +302,21 @@ describe("NodeDetail", () => {
   it("renders a text output and a file output", () => {
     const graph = fixtureGraph();
     graph.nodes[3].output = { kind: "text", text: "本文档共 12 页" };
-    graph.nodes[5].output = { kind: "file", name: "部门汇总.xlsx" };
+    graph.nodes[5].output = {
+      kind: "file",
+      ref: "outputs/n6.xlsx",
+      name: "部门汇总.xlsx",
+    };
     seedGraph({ graph, selectedNodeId: "n4" });
     const { rerender } = render(<NodeDetail />);
     expect(screen.getByTestId("node-output-text").textContent).toContain("本文档共 12 页");
 
     act(() => useAppStore.setState({ selectedNodeId: "n6" }));
     rerender(<NodeDetail />);
-    expect(screen.getByTestId("node-output-file").textContent).toContain("部门汇总.xlsx");
+    const download = screen.getByTestId("node-output-file");
+    expect(download.textContent).toContain("部门汇总.xlsx");
+    expect(download).toHaveAttribute("href", "/api/outputs/n6");
+    expect(download).toHaveAttribute("download", "部门汇总.xlsx");
   });
 
   it("prompts for a selection when nothing is selected", () => {
@@ -306,17 +326,16 @@ describe("NodeDetail", () => {
   });
 });
 
-describe("FlowBar (批准)", () => {
-  it("offers 执行 / 修改 while awaiting approval — 执行 disabled until the engine exists", () => {
+describe("FlowBar (批准 / 执行 / 暂停)", () => {
+  it("offers 执行 / 修改 while awaiting approval, with 执行 enabled", () => {
     seedGraph();
     render(<FlowBar />);
 
     expect(screen.getByTestId("flowbar").textContent).toContain("7 个节点");
     expect(screen.getByTestId("flowbar-revise")).toBeInTheDocument();
-    // No execution engine yet: the button must not look runnable, or the user (and the
-    // model) will believe a run happened. It once narrated an output that never existed.
-    expect(screen.getByTestId("flowbar-run")).toBeDisabled();
-    expect(screen.getByTestId("flowbar-exec-unavailable")).toBeInTheDocument();
+    // The engine exists now — 执行 must be clickable and must not narrate unavailability.
+    expect(screen.getByTestId("flowbar-run")).not.toBeDisabled();
+    expect(screen.queryByTestId("flowbar-exec-unavailable")).toBeNull();
 
     // 修改 points the user at the shared input rather than faking a dialog.
     expect(screen.queryByTestId("flowbar-hint")).toBeNull();
@@ -324,14 +343,140 @@ describe("FlowBar (批准)", () => {
     expect(screen.getByTestId("flowbar-hint")).toBeInTheDocument();
   });
 
-  it("stays hidden without a graph or outside awaiting_approval", () => {
+  it("swaps 执行 for 暂停 while executing, and shows the honest 正在完成 hint", () => {
     seedGraph({ graphStage: "executing" });
+    const { rerender } = render(<FlowBar />);
+    // No re-trigger: the run button is gone, only 暂停 remains.
+    expect(screen.queryByTestId("flowbar-run")).toBeNull();
+    expect(screen.getByTestId("flowbar-pause")).not.toBeDisabled();
+    expect(screen.queryByTestId("flowbar-pausing")).toBeNull();
+
+    // Once a pause is requested the current node still runs — say so, disable the button.
+    act(() => useAppStore.setState({ pauseRequested: true }));
+    rerender(<FlowBar />);
+    expect(screen.getByTestId("flowbar-pause")).toBeDisabled();
+    const hint = screen.getByTestId("flowbar-pausing").textContent ?? "";
+    expect(hint).toContain("正在完成当前节点");
+  });
+
+  it("offers 继续 after a run pauses", () => {
+    seedGraph({ graphStage: "paused" });
+    render(<FlowBar />);
+    expect(screen.getByTestId("flowbar-paused")).toBeInTheDocument();
+    expect(screen.getByTestId("flowbar-run").textContent).toContain("继续");
+  });
+
+  it("stays hidden without a graph or in a drafting/revising state", () => {
+    seedGraph({ graphStage: "drafting" });
     const { rerender } = render(<FlowBar />);
     expect(screen.queryByTestId("flowbar")).toBeNull();
 
     act(() => useAppStore.setState({ graph: null, graphStage: null }));
     rerender(<FlowBar />);
     expect(screen.queryByTestId("flowbar")).toBeNull();
+  });
+});
+
+describe("workflow execution", () => {
+  it("执行 calls POST /workflow/execute, not sendMessage", async () => {
+    seedGraph();
+    const sendMessageSpy = vi.fn();
+    useAppStore.setState({ sendMessage: sendMessageSpy });
+    hoisted.readSseStream.mockImplementationOnce(async () => undefined);
+
+    await useAppStore.getState().executeWorkflow();
+
+    expect(hoisted.executeWorkflow).toHaveBeenCalledWith("s1", expect.any(AbortSignal));
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    // The controller is cleared once the stream ends.
+    expect(useAppStore.getState().executeController).toBeNull();
+  });
+
+  it("lights nodes up in real time from node_start / node_end", async () => {
+    seedGraph();
+    const seen: Array<{ status: string; ms: number | null }> = [];
+    const snapshot = () => {
+      const n = useAppStore.getState().graph?.nodes.find((x) => x.id === "n4");
+      seen.push({ status: n?.status ?? "?", ms: n?.duration_ms ?? null });
+    };
+    hoisted.readSseStream.mockImplementationOnce(async (_reader, onEvent) => {
+      onEvent({ type: "stage_change", stage: "executing" });
+      onEvent({ type: "node_start", node_id: "n4", name: "按部门汇总" });
+      snapshot();
+      onEvent({ type: "node_end", node_id: "n4", status: "ok", duration_ms: 812 });
+      snapshot();
+    });
+
+    await useAppStore.getState().executeWorkflow();
+
+    expect(seen[0]).toEqual({ status: "running", ms: null });
+    expect(seen[1]).toEqual({ status: "ok", ms: 812 });
+  });
+
+  it("applies the authoritative graph (with outputs) on done", async () => {
+    seedGraph();
+    const withOutput = fixtureGraph();
+    withOutput.nodes[3].status = "ok";
+    withOutput.nodes[3].output = { kind: "table", columns: ["部门"], rows: [["销售部"]] };
+    hoisted.readSseStream.mockImplementationOnce(async (_reader, onEvent) => {
+      onEvent({ type: "stage_change", stage: "executing" });
+      onEvent({ type: "done", stage: "awaiting_approval", total_ms: 100, graph: withOutput });
+    });
+
+    await useAppStore.getState().executeWorkflow();
+
+    const n4 = useAppStore.getState().graph?.nodes.find((n) => n.id === "n4");
+    expect(n4?.output?.kind).toBe("table");
+    expect(useAppStore.getState().graphStage).toBe("awaiting_approval");
+  });
+
+  it("requestPause flags the pause and calls the endpoint once", async () => {
+    seedGraph({ graphStage: "executing" });
+    await useAppStore.getState().requestPause();
+    expect(hoisted.pauseWorkflow).toHaveBeenCalledWith("s1");
+    expect(useAppStore.getState().pauseRequested).toBe(true);
+
+    // A second click while the current node still runs must not fire again.
+    await useAppStore.getState().requestPause();
+    expect(hoisted.pauseWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes outputs without regressing an in-flight node's status", async () => {
+    const graph = fixtureGraph(); // n4 pending, n5 stale
+    seedGraph({ graph, graphStage: "executing" });
+    // n4 is running locally; the DB still reports it as pending but now has an output.
+    useAppStore.getState().markNodeRunning("n4");
+    const fetched = fixtureGraph();
+    fetched.nodes[3].status = "pending";
+    fetched.nodes[3].output = { kind: "table", columns: ["部门"], rows: [["销售部"]] };
+    hoisted.getWorkflow.mockResolvedValueOnce({
+      session_id: "s1",
+      stage: "executing",
+      nodes: fetched.nodes,
+      edges: fetched.edges,
+    });
+
+    await useAppStore.getState().refreshNodeOutputs("s1");
+
+    const n4 = useAppStore.getState().graph?.nodes.find((n) => n.id === "n4");
+    expect(n4?.status).toBe("running"); // status untouched
+    expect(n4?.output?.kind).toBe("table"); // artifact picked up
+  });
+
+  it("re-reads the graph when the stream ends without a terminal done", async () => {
+    seedGraph();
+    hoisted.readSseStream.mockImplementationOnce(async () => undefined); // dropped
+    hoisted.getWorkflow.mockResolvedValueOnce({
+      session_id: "s1",
+      stage: "awaiting_approval",
+      nodes: fixtureGraph().nodes,
+      edges: fixtureGraph().edges,
+    });
+
+    await useAppStore.getState().executeWorkflow();
+
+    expect(hoisted.getWorkflow).toHaveBeenCalledWith("s1");
+    await waitFor(() => expect(useAppStore.getState().graphStage).toBe("awaiting_approval"));
   });
 });
 

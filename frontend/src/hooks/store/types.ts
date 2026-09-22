@@ -1,5 +1,6 @@
 import type { PreviewTarget, Tab } from "../../domain/workflow";
 import type { Graph, Stage } from "../../domain/graph";
+import type { ExecuteEvent } from "../../api/sessions";
 
 // Re-export shared state types from state.ts so slice helpers can import
 // everything from one place.
@@ -74,6 +75,15 @@ export type Actions = {
   selectNode: (nodeId: string | null) => void;
   setWorkspaceView: (view: WorkspaceView) => void;
   setRightPanel: (tab: RightPanelTab) => void;
+
+  // Workflow execution (approve → run → pause)
+  executeWorkflow: () => Promise<void>;
+  requestPause: () => Promise<void>;
+  abortExecute: () => void;
+  markNodeRunning: (nodeId: string) => void;
+  applyNodeEnd: (e: Extract<ExecuteEvent, { type: "node_end" }>) => void;
+  /** Pull finished nodes' artifacts without disturbing local in-flight statuses. */
+  refreshNodeOutputs: (sessionId: string) => Promise<void>;
 
   // Reactions (P)
   toggleReaction: (msgId: string, reaction: ReactionValue) => void;

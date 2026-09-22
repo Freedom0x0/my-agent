@@ -5,6 +5,7 @@ The loop no longer executes tools: the model *compiles* a workflow graph via
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -235,6 +236,28 @@ def test_process_chat_invalid_graph_is_rejected_then_retried(
     assert response.tool_calls[0]["summary"] == "工作流图不合法"
     assert response.tool_calls[1]["status"] == "ok"
     assert response.stage == "awaiting_approval"
+
+
+def test_invalid_graph_log_includes_validation_reason(
+    session_store: SessionStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    session = session_store.get_or_create("sid")
+    bad = {"nodes": [{"id": "n_bad", "label": "汇总", "tool": "tablex_nope"}]}
+
+    with caplog.at_level(logging.WARNING):
+        result, submitted = agent_module._handle_tool_call(
+            session,
+            agent_module.ToolCall(
+                tool_use_id="tu-1",
+                name=META_TOOL_NAME,
+                input=bad,
+            ),
+        )
+
+    assert not result.success
+    assert not submitted
+    assert "n_bad" in caplog.text
+    assert "tablex_nope" in caplog.text
 
 
 def test_process_chat_graph_is_injected_into_every_later_turn(
