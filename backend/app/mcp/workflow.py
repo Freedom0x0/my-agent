@@ -37,6 +37,17 @@ TOOL_PARAMS: dict[str, dict[str, Any]] = {
 # `sheets` — which is the whole point of the check.
 UNIVERSAL_EDGE_PARAMS = frozenset({"sheet"})
 
+# These tools can obtain their input directly from a registered file. Every
+# other node consumes an upstream artifact and therefore must have an in-edge.
+SOURCE_NODE_TOOL_NAMES = frozenset({
+    "tablex_upload",
+    "tablex_inspect",
+    "tablex_read_chunk",
+    "tablex_decrypt",
+    "tablex_formula_graph",
+    "tablex_template_fill",
+})
+
 
 class WorkflowError(ValueError):
     """The model submitted a graph the backend cannot accept.
@@ -190,6 +201,11 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
             continue
         seen_edges.add(key)
         edges.append({"from_node": from_node, "to_node": to_node, "to_param": to_param})
+
+    nodes_with_inbound = {edge["to_node"] for edge in edges}
+    for node in nodes:
+        if node["tool"] not in SOURCE_NODE_TOOL_NAMES and node["id"] not in nodes_with_inbound:
+            raise WorkflowError(f"非源节点 {node['id']}（{node['tool']}）没有入边")
 
     graph = {"nodes": nodes, "edges": edges}
     topo_order(graph)  # raises on a cycle

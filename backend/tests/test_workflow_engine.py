@@ -21,6 +21,7 @@ from backend.app.db import get_output, init_db, save_workflow
 from backend.app.main import create_app
 from backend.app.mcp.engine import (
     _execute_sync,
+    _build_output,
     mark_stale,
     transitive_downstream,
 )
@@ -30,7 +31,16 @@ from backend.app.mcp.workflow import WorkflowError, normalize_graph
 
 
 def _graph(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    return normalize_graph({"nodes": nodes, "edges": edges or []})
+    graph_edges = edges or []
+    nodes_with_inbound = {edge["to_node"] for edge in graph_edges}
+    normalized_nodes: list[dict[str, Any]] = []
+    for node in nodes:
+        normalized = {**node, "input": dict(node.get("input") or {})}
+        if normalized["id"] not in nodes_with_inbound and normalized["tool"] == "tablex_normalize":
+            normalized["tool"] = "tablex_upload"
+            normalized["input"] = {"file_id": f"fixture-{normalized['id']}"}
+        normalized_nodes.append(normalized)
+    return normalize_graph({"nodes": normalized_nodes, "edges": graph_edges})
 
 
 def _node(nid: str, tool: str = "tablex_normalize", **inp: Any) -> dict[str, Any]:
@@ -183,6 +193,64 @@ def test_second_run_reuses_finished_nodes(tmp_path, monkeypatch) -> None:
     assert all(e.get("cached") for e in events if e["type"] == "node_end")
 
 
+def test_non_table_cache_with_downstream_is_recomputed(tmp_path, monkeypatch) -> None:
+    df = pd.DataFrame({"部门": ["研发"], "金额": [10]})
+    graph = _graph(
+        [_node("n_j1"), _node("n_e1")],
+        [{"from_node": "n_j1", "to_node": "n_e1", "to_param": "sheet"}],
+    )
+    upstream, downstream = graph["nodes"]
+    upstream.update({
+        "status": "ok",
+        "output": {"kind": "file", "ref": "outputs/n_j1.xlsx", "name": None},
+        "cached": True,
+    })
+    downstream.update({"status": "error", "error": "上游节点 n_j1 没有表格输出可供绑定"})
+    session, store = _setup(tmp_path, monkeypatch, graph)
+    calls: list[str] = []
+
+    def runner(tool_call, shim):
+        calls.append(tool_call.tool_use_id)
+        return _table_runner(df)(tool_call, shim)
+
+    _run(session, store, runner)
+
+    assert calls == ["n_j1", "n_e1"]
+    assert upstream["output"]["kind"] == "table"
+    assert not upstream["cached"]
+    assert downstream["status"] == "ok"
+
+
+def test_cached_export_recomputes_when_upstream_is_stale(tmp_path, monkeypatch) -> None:
+    df = pd.DataFrame({"部门": ["研发"], "金额": [10]})
+    graph = _graph(
+        [_node("n_up"), _node("n_export", "tablex_export", output_name="旧结果")],
+        [{"from_node": "n_up", "to_node": "n_export", "to_param": "sheet"}],
+    )
+    upstream, export = graph["nodes"]
+    upstream["status"] = "stale"
+    export.update({
+        "status": "ok",
+        "output": {"kind": "file", "ref": "outputs/n_export.xlsx", "name": "旧结果"},
+        "cached": True,
+    })
+    session, store = _setup(tmp_path, monkeypatch, graph)
+    calls: list[str] = []
+
+    def runner(tool_call, shim):
+        calls.append(tool_call.tool_use_id)
+        if tool_call.tool_use_id == "n_up":
+            return _table_runner(df)(tool_call, shim)
+        shim.tables["joined"] = df.copy()
+        return ToolResult(success=True, summary="导出成功", data={"output_id": "n_export"})
+
+    _run(session, store, runner)
+
+    assert calls == ["n_up", "n_export"]
+    assert export["cached"] is False
+    assert export["status"] == "ok"
+
+
 def test_run_stage_goes_executing_then_awaiting_approval(tmp_path, monkeypatch) -> None:
     df = pd.DataFrame({"v": [1]})
     graph = _graph([_node("n_up")])
@@ -230,6 +298,22 @@ def test_table_output_is_written_to_disk(tmp_path, monkeypatch) -> None:
     assert output["rows"][0] == ["研发", "7"]
     artifact = Path(get_settings().APP_DATA_DIR).resolve() / output["ref"]
     assert artifact.exists()
+
+
+def test_join_output_remains_a_table_for_downstream_export(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path / "runtime"))
+    get_settings.cache_clear()
+    tables = {"预算与支出对比": pd.DataFrame({"部门": ["研发"], "金额": [10]})}
+    result = ToolResult(
+        success=True,
+        summary="join 完成",
+        data={"output_id": "n_j1", "output_sheet": "预算与支出对比"},
+    )
+
+    output = _build_output("sid", "n_j1", {}, tables, result)
+
+    assert output["kind"] == "table"
+    assert output["ref"].endswith("n_j1.parquet") or output["ref"].endswith("n_j1.pkl")
 
 
 # ----- failure propagation ------------------------------------------------

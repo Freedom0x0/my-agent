@@ -122,6 +122,13 @@ export const workflowResponseSchema = graphSchema.extend({
   stage: stageSchema,
 });
 
+/** POST /sessions/{id}/workflow/pause — acknowledges the request, not the stop. */
+export const pauseResponseSchema = z.object({
+  session_id: z.string(),
+  stage: stageSchema,
+  pause_requested: z.boolean(),
+});
+
 export type GraphNodeDto = z.infer<typeof graphNodeSchema>;
 export type GraphEdgeDto = z.infer<typeof graphEdgeSchema>;
 export type GraphDto = z.infer<typeof graphSchema>;

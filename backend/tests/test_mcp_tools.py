@@ -169,6 +169,60 @@ def test_handle_upload_loads_sheets(sample_workbook: Path, tmp_path: Path) -> No
     assert "file-001::明细" in s.tables
 
 
+def test_handle_upload_loads_only_requested_sheet(tmp_path: Path) -> None:
+    workbook = Workbook()
+    first = workbook.active
+    first.title = "收支明细"
+    first.append(["项目", "金额"])
+    first.append(["A", 100])
+    first.append(["B", 200])
+    budget = workbook.create_sheet("预算")
+    budget.append(["项目", "预算金额"])
+    budget.append(["A", 500])
+    budget.append(["B", 600])
+    path = tmp_path / "multi-sheet.xlsx"
+    workbook.save(path)
+
+    session = Session("s", tmp_path / "out")
+    session.files["file-001"] = {"path": str(path), "sha256": "x", "original_name": path.name}
+    result = handle_upload(
+        ToolCall(
+            tool_use_id="u1",
+            name="tablex_upload",
+            input={"file_id": "file-001", "sheet": "预算"},
+        ),
+        session,
+    )
+
+    assert result.success
+    assert result.data["loaded_refs"] == ["file-001::预算"]
+    assert list(session.tables) == ["file-001::预算"]
+    assert "预算金额" in session.tables["file-001::预算"].columns
+    assert "金额" not in session.tables["file-001::预算"].columns
+
+
+def test_handle_upload_rejects_unknown_requested_sheet(sample_workbook: Path, tmp_path: Path) -> None:
+    session = Session("s", tmp_path / "out")
+    session.files["file-001"] = {
+        "path": str(sample_workbook),
+        "sha256": "x",
+        "original_name": sample_workbook.name,
+    }
+
+    result = handle_upload(
+        ToolCall(
+            tool_use_id="u1",
+            name="tablex_upload",
+            input={"file_id": "file-001", "sheet": "不存在"},
+        ),
+        session,
+    )
+
+    assert not result.success
+    assert "不存在" in (result.error or result.summary)
+    assert session.tables == {}
+
+
 def test_handle_upload_missing_file(tmp_path: Path) -> None:
     s = Session("s", tmp_path / "out")
     s.files["file-001"] = {"path": str(tmp_path / "ghost.xlsx"), "sha256": "x", "original_name": "ghost"}
@@ -307,6 +361,28 @@ def test_handle_group_summary_creates_output(session: Session) -> None:
     )
     assert res.success
     assert "汇总结果" in session.tables
+
+
+def test_handle_group_summary_counts_text_values(session: Session) -> None:
+    session.tables["file-001::状态"] = pd.DataFrame(
+        {"部门": ["研发", "研发", "研发", "研发"], "状态": ["进行中", "已完成", None, " "]}
+    )
+    result = handle_group_summary(
+        ToolCall(
+            tool_use_id="g1",
+            name="tablex_group_summary",
+            input={
+                "file_id": "file-001",
+                "sheet": "状态",
+                "group_by": ["部门"],
+                "metrics": {"状态": ["count"]},
+            },
+        ),
+        session,
+    )
+
+    assert result.success
+    assert session.tables["汇总结果"].loc[0, "状态_count"] == 2
 
 
 def test_handle_group_summary_missing_group_col(session: Session) -> None:

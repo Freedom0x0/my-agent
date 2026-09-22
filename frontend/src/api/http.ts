@@ -136,6 +136,43 @@ export async function request<T>(
   return parseBody(response, schema);
 }
 
+/** POST an SSE endpoint and hand back the body reader. Shared by chat and workflow
+ *  execution — both stream `text/event-stream` and are consumed by `readSseStream`. */
+export async function postSse(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+  const requestId = newRequestId();
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      "X-Request-ID": requestId,
+    },
+    body: JSON.stringify(body ?? {}),
+    signal,
+  });
+  if (!response.ok) {
+    throw new ApiError({
+      status: response.status,
+      errorCode: "http_error",
+      message: `SSE 请求失败 ${response.status}`,
+      requestId,
+    });
+  }
+  if (!response.body) {
+    throw new ApiError({
+      status: 0,
+      errorCode: "http_error",
+      message: "SSE 响应无 body",
+      requestId,
+    });
+  }
+  return response.body.getReader();
+}
+
 export const httpClient = {
   getJson<T>(path: string, schema: z.ZodType<T>, options?: RequestOptions) {
     return request<T>(path, { method: "GET" }, schema, options);

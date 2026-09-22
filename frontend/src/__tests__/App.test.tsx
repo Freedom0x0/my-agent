@@ -30,6 +30,8 @@ vi.mock("../api/httpClient", async () => {
       getSession: vi.fn(),
       // No graph by default — the canvas renders its empty state.
       getWorkflow: vi.fn().mockRejectedValue(new Error("workflow_not_found")),
+      executeWorkflow: vi.fn(),
+      pauseWorkflow: vi.fn(),
       downloadUrl: vi.fn((id: string) => `/api/outputs/${id}`),
       download: vi.fn().mockRejectedValue(new Error("not mocked")),
       downloadUploadedFile: vi.fn().mockRejectedValue(new Error("not mocked")),

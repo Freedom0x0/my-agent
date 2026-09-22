@@ -5,7 +5,7 @@ import {
   type ChatResponse,
   type GraphDto,
 } from "./contracts";
-import { ApiError, getApiBase, httpClient, newRequestId, type RequestOptions } from "./http";
+import { httpClient, postSse, type RequestOptions } from "./http";
 
 export type StreamSegment =
   | { type: "text"; content: string }
@@ -44,39 +44,12 @@ export async function chatStream(
   signal?: AbortSignal,
 ): Promise<ReadableStreamDefaultReader<Uint8Array>> {
   const body = chatRequestSchema.parse(payload);
-  const requestId = newRequestId();
-  const response = await fetch(`${getApiBase()}/chat/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-      "X-Request-ID": requestId,
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!response.ok) {
-    throw new ApiError({
-      status: response.status,
-      errorCode: "http_error",
-      message: `SSE 请求失败 ${response.status}`,
-      requestId,
-    });
-  }
-  if (!response.body) {
-    throw new ApiError({
-      status: 0,
-      errorCode: "http_error",
-      message: "SSE 响应无 body",
-      requestId,
-    });
-  }
-  return response.body.getReader();
+  return postSse("/chat/stream", body, signal);
 }
 
-export async function readSseStream(
+export async function readSseStream<T = StreamEvent>(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  onEvent: (event: StreamEvent) => void,
+  onEvent: (event: T) => void,
 ): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -96,7 +69,7 @@ export async function readSseStream(
       const payload = dataLines.join("\n");
       if (!payload || payload === "[DONE]") continue;
       try {
-        const parsed = JSON.parse(payload) as StreamEvent;
+        const parsed = JSON.parse(payload) as T;
         onEvent(parsed);
       } catch {
         // Skip malformed line — model clients should tolerate the occasional bad frame.

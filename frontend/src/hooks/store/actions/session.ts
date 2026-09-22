@@ -34,6 +34,9 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
     },
 
     selectSession: async (id: string) => {
+      // A run streaming into the old session must not keep painting its events into
+      // the new one — abort it and let the fresh session's load take over.
+      get().abortExecute?.();
       const tabs = get().tabsBySession[id] ?? [];
       const activeId = get().activeTabBySession[id] ?? null;
       const activeTab = activeId ? tabs.find((t) => t.id === activeId) ?? null : null;
@@ -52,6 +55,8 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         graph: null,
         graphStage: null,
         selectedNodeId: null,
+        executeController: null,
+        pauseRequested: false,
       });
       localStorage.setItem(SESSION_KEY, id);
       try {
@@ -97,6 +102,8 @@ export function sessionActions(set: Set, get: Get): Pick<Actions, "loadSessions"
         graph: null,
         graphStage: null,
         selectedNodeId: null,
+        executeController: null,
+        pauseRequested: false,
       });
       localStorage.setItem(SESSION_KEY, id);
       return id;

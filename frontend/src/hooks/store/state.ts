@@ -63,6 +63,10 @@ export type WorkflowState = {
   workspaceView: WorkspaceView;
   rightPanel: RightPanelTab;
   chatUnread: boolean;
+  /** Live SSE reader for a running graph — aborted on session switch / unmount. */
+  executeController: AbortController | null;
+  /** User asked to pause; the run keeps going until the current node finishes. */
+  pauseRequested: boolean;
 };
 
 export const initial: WorkflowState = {
@@ -101,6 +105,8 @@ export const initial: WorkflowState = {
   workspaceView: "chat",
   rightPanel: "file",
   chatUnread: false,
+  executeController: null,
+  pauseRequested: false,
 };
 
 export const SESSION_KEY = "tablex.current_session_id";
